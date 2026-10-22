@@ -1,10 +1,10 @@
 # pi-context-plugin
 
-Hybrid compaction + auto-rename extension for [pi](https://github.com/badlogic/pi-mono).
+Hybrid compaction, auto-rename, and built-in pi-vcc extension for [pi](https://github.com/badlogic/pi-mono).
 
 ## What it does
 
-Two independent features:
+Three features:
 
 1. **Hybrid compaction** — replaces pi's default compaction with:
    - a full rolling summary covering the entire conversation (not just the turn prefix)
@@ -99,7 +99,7 @@ Both default to `""` (no injection).
 ```bash
 git clone <repo>
 cd pi-context-plugin
-git submodule update --init --recursive   # vendor/pi-vcc (fallback)
+git submodule update --init --recursive   # vendor/pi-vcc (pi-vcc integration)
 pi --extension ./src/index.ts
 ```
 
