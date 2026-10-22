@@ -1,6 +1,8 @@
 /**
- * Prompt templates for hybrid compaction.
+ * Prompt templates for pi-context-plugin.
  */
+
+// --- Hybrid compaction ---
 
 export interface SummaryPromptOptions {
 	latestUserMessage: string;
@@ -25,11 +27,16 @@ export function buildSummaryPrompt(options: SummaryPromptOptions): string {
 	const { latestUserMessage, conversationText, previousSummary } = options;
 
 	const prevCtx = previousSummary
-		? `\nUpdate this existing summary with new information. Preserve all existing information, add new progress, and update the Progress section.\n\nPrevious summary:\n${previousSummary}\n`
+		? `
+Update this existing summary with new information. Preserve all existing information, add new progress, and update the Progress section.
+
+Previous summary:
+${previousSummary}
+`
 		: "";
 
-	return "<|think_off|>\n\n" + `You are a conversation summarizer. ${prevCtx}
-
+	return "<|think_off|>\n\n" +
+		`You are a conversation summarizer. ${prevCtx}
 Create a structured summary of this conversation. Use EXACTLY this format:
 
 ## Original Request
@@ -63,4 +70,27 @@ Verbatim raw messages from the cut point onward follow this summary in the model
 <conversation>
 ${conversationText}
 </conversation>`;
+}
+
+// --- Auto-rename ---
+
+export interface RenamePromptOptions {
+	firstMessage: string;
+	recentMessages: string[];
+}
+
+/**
+ * Build the session-title prompt.
+ */
+export function buildRenamePrompt(options: RenamePromptOptions): string {
+	const { firstMessage, recentMessages } = options;
+
+	return `Generate a short title (max 10 words) for this conversation.
+
+First message: ${firstMessage}
+
+Recent messages:
+${recentMessages.map((m, i) => `${i + 1}. ${m}`).join("\n")}
+
+Respond with ONLY the title, nothing else.`;
 }
