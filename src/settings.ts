@@ -27,11 +27,17 @@ export interface ContextPluginSettings {
 	 * Empty string = no system prompt sent (default).
 	 */
 	compactionSystemPromptPrefix: string;
+	/**
+	 * Re-evaluate the session title every N settled turns.
+	 * 0 = one-shot (name only after the first settled turn).
+	 */
+	autonameRefreshTurns: number;
 }
 
 export const DEFAULT_SETTINGS: ContextPluginSettings = {
 	autonameSystemPromptPrefix: "",
 	compactionSystemPromptPrefix: "",
+	autonameRefreshTurns: 5,
 };
 
 const readJson = (path: string): Record<string, unknown> | null => {
@@ -46,12 +52,17 @@ const readJson = (path: string): Record<string, unknown> | null => {
 const coerceString = (v: unknown): string =>
 	typeof v === "string" ? v : "";
 
+/** Coerce a setting value to a non-negative integer, failing closed to 0 (one-shot). */
+const coerceNonNegativeInt = (v: unknown): number =>
+	typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : 0;
+
 export function loadSettings(): ContextPluginSettings {
 	const parsed = readJson(settingsPath());
 	if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SETTINGS };
 	const merged = { ...DEFAULT_SETTINGS, ...(parsed as Partial<ContextPluginSettings>) };
 	merged.autonameSystemPromptPrefix = coerceString(parsed.autonameSystemPromptPrefix);
 	merged.compactionSystemPromptPrefix = coerceString(parsed.compactionSystemPromptPrefix);
+	merged.autonameRefreshTurns = coerceNonNegativeInt(parsed.autonameRefreshTurns);
 	return merged;
 }
 

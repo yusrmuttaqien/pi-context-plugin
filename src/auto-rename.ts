@@ -1,20 +1,61 @@
 /**
- * Session auto-rename.
+ * Auto-rename handler.
  *
- * Renames the session once after the first agent_settled event, using a
- * short LLM-generated title. Best-effort: failures are silent.
+ * After the first settled agent turn, generates a short session title from
+ * the conversation and sets it via `pi.setSessionName`. Best-effort; failures
+ * are silent.
+ *
+ * The title uses a two-section format — `<active context> - <latest activity>`
+ * — so a single chat that progresses to new topics keeps a name that tracks
+ * where the conversation is now, not where it started. To support that, the
+ * naming call re-runs every `autonameRefreshTurns` settled turns (0 = one-shot),
+ * and the model may respond NO_CHANGE when the current title still fits.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { buildRenamePrompt } from "./prompts";
+import { buildRenamePrompt, RENAME_NO_CHANGE } from "./prompts";
 import { loadSettings } from "./settings";
 
+/** Per-message cap for the naming call — titles only need a slice of each message. */
+const TITLE_MESSAGE_CAP = 500;
+
+/**
+ * Select the user messages the naming call sees: the first, up to three
+ * evenly sampled from the middle, and the last three. The active context must
+ * be derivable from the whole conversation, not just the first message —
+ * topics can shift mid-conversation.
+ */
+function selectMessagesForTitle(userMessages: string[]): string[] {
+	const n = userMessages.length;
+	if (n <= 5) return [...userMessages];
+
+	const first = userMessages[0];
+	const recent = userMessages.slice(-3);
+	const middle = userMessages.slice(1, n - 3);
+	const count = Math.min(3, middle.length);
+	const sampled: string[] = [];
+	for (let i = 0; i < count; i++) {
+		const idx = Math.min(
+			middle.length - 1,
+			Math.floor(((i + 0.5) * middle.length) / count),
+		);
+		if (!sampled.includes(middle[idx])) sampled.push(middle[idx]);
+	}
+	return [first, ...sampled, ...recent];
+}
+
 export function registerAutoRename(pi: ExtensionAPI): void {
-	// --- Auto-rename: rename the session once after the first agent_settled ---
-	let autoRenamed = false;
+	let settledCount = 0;
+	let currentTitle: string | null = null;
 
 	pi.on("agent_settled", async (_event, ctx) => {
-		if (autoRenamed) return;
+		settledCount++;
+
+		const { autonameSystemPromptPrefix, autonameRefreshTurns } = loadSettings();
+		const isFirst = currentTitle === null;
+		const due =
+			isFirst || (autonameRefreshTurns > 0 && settledCount % autonameRefreshTurns === 0);
+		if (!due) return;
 
 		const model = ctx.model;
 		if (!model) return;
@@ -24,36 +65,30 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 		const userMessages: string[] = [];
 		for (const entry of entries) {
 			if (entry.type !== "message" || entry.message.role !== "user") continue;
-			const text = entry.message.content
+			let text = entry.message.content
 				.filter((b): b is { type: "text"; text: string } => b.type === "text")
 				.map((b) => b.text)
 				.join(" ")
 				.trim();
-			if (text) {
-				// Cap oversized messages (pasted logs, dumps).
-				if (text.length > 2000) {
-					text = text.slice(0, 1500) + "\n\n[truncated]\n\n" + text.slice(-500);
-				}
-				userMessages.push(text);
+			if (!text) continue;
+			if (text.length > TITLE_MESSAGE_CAP) {
+				text = `${text.slice(0, 400)}\n...\n${text.slice(-100)}`;
 			}
+			userMessages.push(text);
 		}
 
 		if (userMessages.length === 0) return;
 
-		// Build the naming prompt.
-		const first = userMessages[0];
-		const recent = userMessages.slice(-3);
-		const prompt = buildRenamePrompt({ firstMessage: first, recentMessages: recent });
+		const prompt = buildRenamePrompt({
+			messages: selectMessagesForTitle(userMessages),
+			currentTitle: currentTitle ?? undefined,
+		});
+
+		const systemPrompt = autonameSystemPromptPrefix.trim()
+			? `${autonameSystemPromptPrefix.trim()}\n\nYou generate short session titles. Respond with only the title.`
+			: "You generate short session titles. Respond with only the title.";
 
 		// Call the LLM.
-			const { autonameSystemPromptPrefix } = loadSettings();
-			const systemPrompt =
-				autonameSystemPromptPrefix.trim()
-					? `${autonameSystemPromptPrefix.trim()}
-
-You generate short session titles. Respond with only the title.`
-					: "You generate short session titles. Respond with only the title.";
-
 		try {
 			const response = await ctx.modelRegistry.complete(
 				model,
@@ -80,9 +115,9 @@ You generate short session titles. Respond with only the title.`
 				.join("")
 				.trim();
 
-			if (name) {
+			if (name && name.toUpperCase() !== RENAME_NO_CHANGE.toUpperCase()) {
 				pi.setSessionName(name);
-				autoRenamed = true;
+				currentTitle = name;
 			}
 		} catch {
 			// Silently fail — naming is best-effort.

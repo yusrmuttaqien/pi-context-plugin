@@ -74,23 +74,39 @@ ${conversationText}
 
 // --- Auto-rename ---
 
+export const RENAME_NO_CHANGE = "NO_CHANGE";
+
 export interface RenamePromptOptions {
-	firstMessage: string;
-	recentMessages: string[];
+	/** Selected user messages in chronological order (first, sampled middle, recent). */
+	messages: string[];
+	/** Current session title; present on refresh runs. */
+	currentTitle?: string;
 }
 
 /**
  * Build the session-title prompt.
+ *
+ * The active context must be derivable from the whole conversation, not
+ * just the first message — topics can shift mid-conversation.
  */
 export function buildRenamePrompt(options: RenamePromptOptions): string {
-	const { firstMessage, recentMessages } = options;
+	const { messages, currentTitle } = options;
 
-	return `Generate a short title (max 10 words) for this conversation.
+	const current = currentTitle
+		? `\nCurrent title: "${currentTitle}"\nIf the current title still fits the conversation, respond ${RENAME_NO_CHANGE}.\n`
+		: "";
 
-First message: ${firstMessage}
+	return `Generate a title for this conversation.${current}
 
-Recent messages:
-${recentMessages.map((m, i) => `${i + 1}. ${m}`).join("\n")}
+Format: <active context> - <latest activity>
+- <active context>: the topic the conversation is currently about. Derive it from the whole conversation below — if the topic has shifted mid-conversation, use the new topic, not the original one.
+- <latest activity>: what is being worked on right now, from the most recent messages.
+If the conversation is a single simple topic, respond with just a short title (no dash).
 
-Respond with ONLY the title, nothing else.`;
+Max 14 words.
+
+Conversation (user messages, chronological):
+${messages.map((m, i) => `${i + 1}. ${m}`).join("\n")}
+
+Respond with ONLY the title (or ${RENAME_NO_CHANGE}), nothing else.`;
 }

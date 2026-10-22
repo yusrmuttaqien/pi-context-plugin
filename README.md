@@ -11,7 +11,7 @@ Three features:
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust signal telling the model to prefer raw messages over the summary for recent content
 
-2. **Auto-rename** — after the first settled agent turn, generates a short session title from the conversation and sets it via `pi.setSessionName`. Best-effort; failures are silent.
+2. **Auto-rename** — after the first settled agent turn, generates a session title in `<active context> - <latest activity>` format and sets it via `pi.setSessionName`. Re-evaluated every `autonameRefreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent.
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
 
 ## Why
@@ -50,14 +50,17 @@ LLM call (same model as chat)
 ### Auto-rename
 
 ```
-First agent_settled
+First agent_settled, then every autonameRefreshTurns settled turns
     ↓
-Collect user messages (each capped at 2000 chars, head + tail)
+Select user messages: first + up to 3 sampled middle + last 3 (each capped at 500 chars)
     ↓
-LLM call (max 10-word title, 10s timeout)
+LLM call (<active context> - <latest activity>, max 14 words, 10s timeout)
     ↓
-pi.setSessionName(title)
+NO_CHANGE → keep current title
+otherwise   → pi.setSessionName(title)
 ```
+
+The active context is derived from the whole provided conversation, not just the first message — if the topic shifted mid-conversation, the new topic replaces the original anchor. On refresh runs the model sees the current title and can respond `NO_CHANGE` to leave it alone.
 
 ### pi-vcc integration
 
@@ -85,14 +88,14 @@ This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable vi
 ```json
 {
   "autonameSystemPromptPrefix": "",
-  "compactionSystemPromptPrefix": ""
+  "compactionSystemPromptPrefix": "",
+  "autonameRefreshTurns": 5
 }
 ```
 
-- `autonameSystemPromptPrefix` — injected at the start of the auto-rename system prompt.
-- `compactionSystemPromptPrefix` — injected as the system prompt for the compaction LLM call. Empty = no system prompt sent (the summary prompt itself is a user message).
-
-Both default to `""` (no injection).
+- `autonameSystemPromptPrefix` — injected at the start of the auto-rename system prompt. Default `""` (no injection).
+- `compactionSystemPromptPrefix` — injected as the system prompt for the compaction LLM call. Empty = no system prompt sent (the summary prompt itself is a user message). Default `""`.
+- `autonameRefreshTurns` — re-evaluate the session title every N settled turns. `0` = one-shot (name only after the first settled turn). Default `5`.
 
 ## Usage
 
