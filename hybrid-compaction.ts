@@ -55,7 +55,13 @@ export default function (pi: ExtensionAPI) {
 				.map((b) => b.text)
 				.join(" ")
 				.trim();
-			if (text) userMessages.push(text);
+			if (text) {
+				// Cap oversized messages (pasted logs, dumps)
+				if (text.length > 2000) {
+					text = text.slice(0, 1500) + "\n\n[truncated]\n\n" + text.slice(-500);
+				}
+				userMessages.push(text);
+			}
 		}
 
 		if (userMessages.length === 0) return;
