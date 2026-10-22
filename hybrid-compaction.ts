@@ -36,6 +36,78 @@ try {
 }
 
 export default function (pi: ExtensionAPI) {
+	// --- Auto-rename: rename the session once after the first agent_settled ---
+	let autoRenamed = false;
+
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (autoRenamed) return;
+
+		const model = ctx.model;
+		if (!model) return;
+
+		// Extract user messages from the transcript
+		const entries = ctx.sessionManager.buildContextEntries();
+		const userMessages: string[] = [];
+		for (const entry of entries) {
+			if (entry.type !== "message" || entry.message.role !== "user") continue;
+			const text = entry.message.content
+				.filter((b): b is { type: "text"; text: string } => b.type === "text")
+				.map((b) => b.text)
+				.join(" ")
+				.trim();
+			if (text) userMessages.push(text);
+		}
+
+		if (userMessages.length === 0) return;
+
+		// Build a simple naming prompt
+		const first = userMessages[0];
+		const recent = userMessages.slice(-3);
+		const prompt =
+			"Generate a short title (max 10 words) for this conversation.\n\n" +
+			`First message: ${first}\n\n` +
+			"Recent messages:\n" +
+			recent.map((m, i) => `${i + 1}. ${m}`).join("\n") +
+			"\n\nRespond with ONLY the title, nothing else.";
+
+		// Call the LLM
+		try {
+			const response = await ctx.modelRegistry.complete(
+				model,
+				{
+					systemPrompt:
+						"You generate short session titles. Respond with only the title.",
+					messages: [
+						{
+							role: "user" as const,
+							content: [{ type: "text" as const, text: prompt }],
+							timestamp: Date.now(),
+						},
+					],
+				},
+				{
+					maxTokens: 100,
+					timeoutMs: 10_000,
+					cacheRetention: "none",
+				},
+			);
+
+			const name = response.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("")
+				.trim();
+
+			if (name) {
+				pi.setSessionName(name);
+				autoRenamed = true;
+			}
+		} catch {
+			// Silently fail — naming is best-effort
+		}
+	});
+
+	// --- Hybrid compaction ---
 	pi.on("session_before_compact", async (event, ctx) => {
 		const { preparation, branchEntries, signal } = event;
 		const {
