@@ -22,6 +22,7 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import { buildSummaryPrompt } from "./prompts";
 
 // Import pi-vcc's compile function from the git submodule.
 // If the submodule is not present, piVccCompile will be null and we
@@ -77,45 +78,11 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// 3. Build the hybrid summary prompt
-		const prevCtx = previousSummary
-			? `\nUpdate this existing summary with new information. Preserve all existing information, add new progress, and update the Progress section.\n\nPrevious summary:\n${previousSummary}\n`
-			: "";
-
-		const prompt = "<|think_off|>\n\n" + `You are a conversation summarizer. ${prevCtx}
-
-Create a structured summary of this conversation. Use EXACTLY this format:
-
-## Original Request
-[What the user originally asked for — the first user message's intent]
-
-## Progress
-### Done
-- [x] [Completed tasks, decisions, deliverables]
-
-### In Progress
-- [ ] [Current work based on the latest user message]
-
-## Latest User Message
-"${latestUserMessage}"
-
-## Current Task
-[What the model is currently working on, based on the latest user message and recent assistant work]
-
-## Key Decisions
-- **[Decision]**: [Rationale]
-
-## Next Steps
-1. [What should happen next]
-
-## Critical Context
-- [File paths, error messages, code snippets, data needed to continue]
-
-## Note
-Verbatim raw messages from the cut point onward follow this summary in the model's context. Trust the raw messages over this summary for recent tool outputs, file paths, code snippets, and exact values. This summary provides context and coherence; the raw messages are the ground truth for recent content.
-
-<conversation>
-${conversationText}
-</conversation>`;
+		const prompt = buildSummaryPrompt({
+			latestUserMessage,
+			conversationText,
+			previousSummary,
+		});
 
 		// 4. Call the model
 		try {
