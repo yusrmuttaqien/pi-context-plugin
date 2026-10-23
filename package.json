@@ -8,6 +8,6 @@
     ]
   },
   "scripts": {
-    "postinstall": "git submodule update --init --recursive || true"
+    "postinstall": "git submodule update --init --recursive || true && node -e \"const fs=require('fs');const p='vendor/pi-vcc/src/core/settings.ts';const s=fs.readFileSync(p,'utf8');fs.writeFileSync(p,s.replace('overrideDefaultCompaction: true','overrideDefaultCompaction: false'))\""
   }
 }
