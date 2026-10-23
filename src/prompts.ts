@@ -35,8 +35,7 @@ ${previousSummary}
 `
 		: "";
 
-	return "<|think_off|>\n\n" +
-		`You are a conversation summarizer. ${prevCtx}
+	return `You are a conversation summarizer. ${prevCtx}
 Create a structured summary of this conversation. Use EXACTLY this format:
 
 ## Original Request
