@@ -2,6 +2,11 @@
   "name": "pi-context-plugin",
   "version": "1.0.0",
   "private": true,
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "scripts": {
     "postinstall": "git submodule update --init --recursive || true"
   }
