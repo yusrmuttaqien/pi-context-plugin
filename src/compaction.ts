@@ -66,9 +66,21 @@ export function registerCompaction(pi: ExtensionAPI): void {
 			"info",
 		);
 
-		// 1. Serialize the messages pi selected for summarization
-		//    (history + turn prefix — covers [start → cut point]).
-		const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
+		// 1. Build the full conversation for the LLM: the messages being
+		//    compacted + the recent raw messages (from firstKeptEntryId
+		//    onwards) that pi will preserve verbatim after the summary.
+		//    Giving the LLM the full context lets it write a better
+		//    transition, even though those recent messages survive as-is.
+		const keptIndex = branchEntries.findIndex((e) => e.id === firstKeptEntryId);
+		const keptMessages = keptIndex >= 0
+			? branchEntries
+					.slice(keptIndex)
+					.filter((e): e is typeof e & { type: "message" } => e.type === "message")
+					.map((e) => e.message)
+			: [];
+		const allMessages = keptIndex >= 0
+			? [...messagesToSummarize, ...keptMessages]
+			: [...messagesToSummarize, ...turnPrefixMessages];
 		const conversationText = serializeConversation(convertToLlm(allMessages));
 
 		// 2. Extract the latest user message from branchEntries.
