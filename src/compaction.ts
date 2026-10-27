@@ -178,6 +178,16 @@ export function registerCompaction(pi: ExtensionAPI): void {
 					const compileMessage = compileError instanceof Error ? compileError.message : String(compileError);
 					ctx.ui.notify(`Hybrid compaction: pi-vcc compile failed: ${compileMessage}`, "warning");
 				}
+			} else {
+				// piVccCompile is null: the top-level require of the vendored
+				// summarize module failed at load time (submodule not checked out
+				// or module resolution failed). Tier 2 is unavailable, so we fall
+				// straight through to pi's default compaction. Surface it so this
+				// silent skip is diagnosable.
+				ctx.ui.notify(
+					"Hybrid compaction: pi-vcc compile unavailable (vendored module did not load) — falling back to pi default",
+					"warning",
+				);
 			}
 
 			// All options exhausted: throw the error, matching pi's default
