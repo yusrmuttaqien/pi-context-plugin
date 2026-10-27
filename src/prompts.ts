@@ -93,8 +93,9 @@ Use EXACTLY this format:
 ## Note
 Fresh raw messages follow this summary — trust them for recent content.
 For older detail not in the fresh messages:
-- Check the Recall Keys first. If a key matches what you need, call vcc_recall with that exact phrase and use the recalled text. Do NOT reconstruct it from memory or reasoning — a recalled fact beats a remembered one; the recalled text is the ground truth.
-- Answer from your own knowledge only if no key or raw message covers it, and say so explicitly.
+- Check the Recall Keys first. If a key matches what you need, call vcc_recall with that exact phrase and scope:'all' (keys point to pre-compaction content, which is off the current conversation path) and use the recalled text. Do NOT reconstruct it from memory or reasoning — a recalled fact beats a remembered one; the recalled text is the ground truth.
+- For other pre-compaction detail a key doesn't cover, search vcc_recall with scope:'all' using distinctive words from the conversation.
+- Answer from your own knowledge only if no key, raw message, or recall covers it, and say so explicitly.
 
 <conversation>
 ${conversationText}

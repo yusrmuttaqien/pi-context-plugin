@@ -31,6 +31,7 @@ The summary is intentionally **lossy**: it carries intent (what's done, what's o
 - Active work (latest message, current task, user constraints) stays **lossless**
 - Dormant detail is **demoted, not deleted**: it becomes verbatim Recall Keys that map topics to search terms
 - A **trust hierarchy** tells the model to recall before reconstructing: raw messages > recalled text > summary > its own memory
+- When recalling pre-compaction content, the prompt tells the model to use `vcc_recall` with `scope: "all"` — that content is off the current conversation path, and the default `lineage` scope only auto-widens when nothing matches in the current context (so generic terms can be hijacked)
 
 ## How it works
 
