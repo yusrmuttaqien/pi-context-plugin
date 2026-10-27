@@ -85,7 +85,7 @@ export interface RenamePromptOptions {
 /**
  * Build the session-title prompt.
  *
- * The active context must be derivable from the whole conversation, not
+ * The main topic must be derivable from the whole conversation, not
  * just the first message — topics can shift mid-conversation.
  */
 export function buildRenamePrompt(options: RenamePromptOptions): string {
@@ -95,17 +95,17 @@ export function buildRenamePrompt(options: RenamePromptOptions): string {
 		? `\nCurrent title: "${currentTitle}"\nIf the current title still fits the conversation, respond ${RENAME_NO_CHANGE}.\n`
 		: "";
 
-	return `Generate a title for this conversation.${current}
+	return `Generate a short title for this conversation.${current}
 
-Format: <active context> - <latest activity>
-- <active context>: the topic the conversation is currently about. Derive it from the whole conversation below — if the topic has shifted mid-conversation, use the new topic, not the original one.
-- <latest activity>: what is being worked on right now, from the most recent messages.
-If the conversation is a single simple topic, respond with just a short title (no dash).
+The title has two parts separated by ": ":
+- Main topic: the overall topic the conversation is currently about. Derive it from the whole conversation below — if the topic has shifted mid-conversation, use the new topic, not the original one.
+- Latest context: what is being worked on right now, from the most recent messages.
 
-Max 14 words.
+Example of a good title: "Auth module refactor: fixing the token refresh bug"
+If the conversation is a single simple topic, use just a short title with no ": " separator.
 
 Conversation (user messages, chronological):
 ${messages.map((m, i) => `${i + 1}. ${m}`).join("\n")}
 
-Respond with ONLY the title (or ${RENAME_NO_CHANGE}), nothing else.`;
+Respond with ONLY the title (or ${RENAME_NO_CHANGE}), max 14 words, with no angle brackets, field labels, numbering, or other text.`;
 }

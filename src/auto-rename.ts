@@ -5,11 +5,12 @@
  * the conversation and sets it via `pi.setSessionName`. Best-effort; failures
  * are silent.
  *
- * The title uses a two-section format — `<active context> - <latest activity>`
+ * The title uses a two-section format — `main topic: latest context`
  * — so a single chat that progresses to new topics keeps a name that tracks
- * where the conversation is now, not where it started. To support that, the
- * naming call re-runs every `autonameRefreshTurns` settled turns (0 = one-shot),
- * and the model may respond NO_CHANGE when the current title still fits.
+ * where the conversation is now, not where it started. Both parts update as
+ * the conversation moves. To support that, the naming call re-runs every
+ * `autonameRefreshTurns` settled turns (0 = one-shot), and the model may
+ * respond NO_CHANGE when the current title still fits.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -21,7 +22,7 @@ const TITLE_MESSAGE_CAP = 500;
 
 /**
  * Select the user messages the naming call sees: the first, up to three
- * evenly sampled from the middle, and the last three. The active context must
+ * evenly sampled from the middle, and the last three. The main topic must
  * be derivable from the whole conversation, not just the first message —
  * topics can shift mid-conversation.
  */

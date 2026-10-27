@@ -11,7 +11,7 @@ Three features:
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust signal telling the model to prefer raw messages over the summary for recent content
 
-2. **Auto-rename** — after the first settled agent turn, generates a session title in `<active context> - <latest activity>` format and sets it via `pi.setSessionName`. Re-evaluated every `autonameRefreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent.
+2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autonameRefreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent.
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
 
 ## Why
@@ -54,13 +54,13 @@ First agent_settled, then every autonameRefreshTurns settled turns
     ↓
 Select user messages: first + up to 3 sampled middle + last 3 (each capped at 500 chars)
     ↓
-LLM call (<active context> - <latest activity>, max 14 words, 10s timeout)
+LLM call (main topic: latest context, max 14 words, 10s timeout)
     ↓
 NO_CHANGE → keep current title
 otherwise   → pi.setSessionName(title)
 ```
 
-The active context is derived from the whole provided conversation, not just the first message — if the topic shifted mid-conversation, the new topic replaces the original anchor. On refresh runs the model sees the current title and can respond `NO_CHANGE` to leave it alone.
+Both parts update as the conversation moves: the main topic is derived from the whole provided conversation (so a mid-conversation topic shift replaces the original anchor), and the latest context tracks the most recent work. On refresh runs the model sees the current title and can respond `NO_CHANGE` to leave it alone.
 
 ### pi-vcc integration
 
