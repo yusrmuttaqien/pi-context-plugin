@@ -32,12 +32,35 @@ export interface ContextPluginSettings {
 	 * 0 = one-shot (name only after the first settled turn).
 	 */
 	autonameRefreshTurns: number;
+	/**
+	 * Target length (words) for the compaction summary. Injected into the
+	 * prompt so the model conditions on it. The token cap is auto-sized from
+	 * this when compactionMaxTokens is null.
+	 */
+	compactionTargetWords: number;
+	/**
+	 * Hard API maxTokens for the summary call. null = auto-sized from
+	 * compactionTargetWords (× tokensPerWord × padding). Set a number to
+	 * override; validated (warns if it would bind before the word target).
+	 */
+	compactionMaxTokens: number | null;
+	/** Average tokens per word used to auto-size the cap (raise for code-heavy sessions). */
+	tokensPerWord: number;
+	/** Padding multiplier on the auto-sized cap (headroom for imprecision + runaway). */
+	padding: number;
+	/** Maximum number of recall-key groups in the summary. */
+	recallKeyBudget: number;
 }
 
 export const DEFAULT_SETTINGS: ContextPluginSettings = {
 	autonameSystemPromptPrefix: "",
 	compactionSystemPromptPrefix: "",
 	autonameRefreshTurns: 5,
+	compactionTargetWords: 600,
+	compactionMaxTokens: null,
+	tokensPerWord: 1.3,
+	padding: 2.0,
+	recallKeyBudget: 10,
 };
 
 const readJson = (path: string): Record<string, unknown> | null => {
@@ -56,6 +79,18 @@ const coerceString = (v: unknown): string =>
 const coerceNonNegativeInt = (v: unknown): number =>
 	typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : 0;
 
+/** Coerce to a positive integer, failing closed to `fallback`. */
+const coercePositiveInt = (v: unknown, fallback: number): number =>
+	typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : fallback;
+
+/** Coerce to a positive number, failing closed to `fallback`. */
+const coercePositiveNumber = (v: unknown, fallback: number): number =>
+	typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback;
+
+/** Coerce to a positive integer or null (for an optional cap). */
+const coerceOptionalInt = (v: unknown): number | null =>
+	typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : null;
+
 export function loadSettings(): ContextPluginSettings {
 	const parsed = readJson(settingsPath());
 	if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SETTINGS };
@@ -63,6 +98,11 @@ export function loadSettings(): ContextPluginSettings {
 	merged.autonameSystemPromptPrefix = coerceString(parsed.autonameSystemPromptPrefix);
 	merged.compactionSystemPromptPrefix = coerceString(parsed.compactionSystemPromptPrefix);
 	merged.autonameRefreshTurns = coerceNonNegativeInt(parsed.autonameRefreshTurns);
+	merged.compactionTargetWords = coercePositiveInt(parsed.compactionTargetWords, DEFAULT_SETTINGS.compactionTargetWords);
+	merged.compactionMaxTokens = coerceOptionalInt(parsed.compactionMaxTokens);
+	merged.tokensPerWord = coercePositiveNumber(parsed.tokensPerWord, DEFAULT_SETTINGS.tokensPerWord);
+	merged.padding = coercePositiveNumber(parsed.padding, DEFAULT_SETTINGS.padding);
+	merged.recallKeyBudget = coercePositiveInt(parsed.recallKeyBudget, DEFAULT_SETTINGS.recallKeyBudget);
 	return merged;
 }
 

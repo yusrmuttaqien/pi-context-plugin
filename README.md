@@ -6,10 +6,12 @@ Hybrid compaction, auto-rename, and built-in pi-vcc extension for [pi](https://g
 
 Three features:
 
-1. **Hybrid compaction** — replaces pi's default compaction with:
-   - a full rolling summary covering the entire conversation (not just the turn prefix)
+1. **Hybrid compaction** — replaces pi's default compaction with a lossy summary plus on-demand recall:
+   - a compact rolling summary covering the entire conversation (not just the turn prefix)
+   - active work kept lossless: the latest user message, the current task, and user-stated constraints
+   - dormant detail demoted into verbatim **Recall Keys**, retrievable on demand with `vcc_recall`
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
-   - an explicit trust signal telling the model to prefer raw messages over the summary for recent content
+   - an explicit trust hierarchy: raw messages > recalled text > summary > model memory
 
 2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autonameRefreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent.
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
@@ -23,6 +25,12 @@ The hybrid compaction fixes that by:
 - Including the **latest user message verbatim** in the summary
 - Describing the **current task** based on the latest state
 - Adding a **trust signal** that tells the model which to prefer: raw messages for recent content, summary for coherence
+
+The summary is intentionally **lossy**: it carries intent (what's done, what's open, what's decided) rather than a verbatim transcript. That is safe because `vcc_recall` provides full-fidelity recall of the pre-compaction conversation on demand — the summary is an index, `vcc_recall` is the archive.
+
+- Active work (latest message, current task, user constraints) stays **lossless**
+- Dormant detail is **demoted, not deleted**: it becomes verbatim Recall Keys that map topics to search terms
+- A **trust hierarchy** tells the model to recall before reconstructing: raw messages > recalled text > summary > its own memory
 
 ## How it works
 
@@ -46,6 +54,8 @@ LLM call (same model as chat)
 │                     │   default)         │
 └─────────────────────┴─────────────────────┘
 ```
+
+The summary the LLM produces is lossy by design: it keeps active work lossless, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled by a word target (injected into the prompt) with an auto-sized token cap as a backstop — see Configuration for the knobs.
 
 ### Auto-rename
 
@@ -89,13 +99,23 @@ This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable vi
 {
   "autonameSystemPromptPrefix": "",
   "compactionSystemPromptPrefix": "",
-  "autonameRefreshTurns": 5
+  "autonameRefreshTurns": 5,
+  "compactionTargetWords": 600,
+  "compactionMaxTokens": null,
+  "tokensPerWord": 1.3,
+  "padding": 2.0,
+  "recallKeyBudget": 10
 }
 ```
 
 - `autonameSystemPromptPrefix` — injected at the start of the auto-rename system prompt. Default `""` (no injection).
 - `compactionSystemPromptPrefix` — injected as the system prompt for the compaction LLM call. Empty = no system prompt sent (the summary prompt itself is a user message). Default `""`.
 - `autonameRefreshTurns` — re-evaluate the session title every N settled turns. `0` = one-shot (name only after the first settled turn). Default `5`.
+- `compactionTargetWords` — target length (words) for the compaction summary, injected into the prompt so the model conditions on it. Default `600`.
+- `compactionMaxTokens` — hard API `maxTokens` for the summary call. `null` (default) = auto-sized from `compactionTargetWords × tokensPerWord × padding`. Set a number to override; a warning fires if it would bind before the word target is reached.
+- `tokensPerWord` — average tokens per word used to auto-size the cap. Raise for code-heavy sessions. Default `1.3`.
+- `padding` — multiplier on the auto-sized cap (headroom for imprecision + runaway). Default `2.0`.
+- `recallKeyBudget` — maximum number of Recall Key groups in the summary. Default `10`.
 
 ## Usage
 
@@ -127,4 +147,5 @@ pi-context-plugin/
 
 - The summary uses the same model as the chat (`ctx.model`).
 - The latest user message is extracted from `branchEntries`, so compaction is branch-aware.
+- The summary is lossy by design; `vcc_recall` is the fidelity layer. Recall Keys are verbatim search terms, so they match the raw JSONL regardless of which compaction tier wrote the summary — recall survives the tier-2/tier-3 fallback.
 - If the summary LLM call fails, pi-vcc's algorithmic `compile()` runs as a fallback. If the submodule is not checked out, the extension throws, matching pi's default compaction behavior.

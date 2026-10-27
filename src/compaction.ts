@@ -14,6 +14,10 @@
  * - Extracts the latest user message verbatim from branchEntries
  * - Branch-aware: uses branchEntries (current branch) for the latest user
  *   message
+ * - Lossy summary: keeps active work lossless, compresses dormant content,
+ *   and demotes pruned detail into verbatim Recall Keys for vcc_recall.
+ * - Length control: word target (injected into the prompt) + auto-sized
+ *   token cap (API backstop).
  * - Fallback: if the summary LLM call fails, calls pi-vcc's algorithmic
  *   compile() function (via git submodule). If pi-vcc is not available,
  *   throws the error (same as pi's default compaction behavior).
@@ -50,9 +54,25 @@ export function registerCompaction(pi: ExtensionAPI): void {
 			return;
 		}
 
-		// Optional system prompt from extension settings.
-		const { compactionSystemPromptPrefix } = loadSettings();
-		const systemPrompt = compactionSystemPromptPrefix.trim() || undefined;
+		// Extension settings for the compaction call.
+		const settings = loadSettings();
+		const systemPrompt = settings.compactionSystemPromptPrefix.trim() || undefined;
+
+		// maxTokens for the summary call: an explicit override (validated), or
+		// auto-sized from the word target with padding when null.
+		const maxTokens =
+			settings.compactionMaxTokens != null
+				? settings.compactionMaxTokens
+				: Math.ceil(settings.compactionTargetWords * settings.tokensPerWord * settings.padding);
+		if (settings.compactionMaxTokens != null) {
+			const minForTarget = settings.compactionTargetWords * settings.tokensPerWord;
+			if (settings.compactionMaxTokens < minForTarget) {
+				ctx.ui.notify(
+					`Hybrid compaction: compactionMaxTokens (${settings.compactionMaxTokens}) is below the ~${Math.ceil(minForTarget)} tokens needed for the ${settings.compactionTargetWords}-word target — the cap may truncate the summary early`,
+					"warning",
+				);
+			}
+		}
 
 		// Use the same model as the chat.
 		const model = ctx.model;
@@ -102,6 +122,8 @@ export function registerCompaction(pi: ExtensionAPI): void {
 			latestUserMessage,
 			conversationText,
 			previousSummary,
+			targetWords: settings.compactionTargetWords,
+			recallKeyBudget: settings.recallKeyBudget,
 		});
 
 		// 4. Call the model.
@@ -119,7 +141,7 @@ export function registerCompaction(pi: ExtensionAPI): void {
 					],
 				},
 				{
-					maxTokens: 8192,
+					maxTokens,
 					signal,
 					cacheRetention: "none",
 					sessionId: uuidv7(),

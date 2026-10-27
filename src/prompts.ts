@@ -8,27 +8,37 @@ export interface SummaryPromptOptions {
 	latestUserMessage: string;
 	conversationText: string;
 	previousSummary?: string;
+	/** Word target injected into the prompt (the length the model should aim for). */
+	targetWords: number;
+	/** Maximum number of recall-key groups in the summary. */
+	recallKeyBudget: number;
 }
 
 /**
  * Build the hybrid summary prompt.
  *
+ * The summary is intentionally lossy: it carries intent (what's done, what's
+ * open, what's decided) while dormant detail is demoted into verbatim Recall
+ * Keys that can be retrieved on demand with vcc_recall. Active work
+ * (Latest User Message, Current Task, user-stated constraints) stays lossless.
+ *
  * Format:
  * - ## Original Request — the first user message's intent
+ * - ## Standing Notes — durable Pref / Lesson / Routine items
  * - ## Progress — Done / In Progress
- * - ## Latest User Message — verbatim quote
- * - ## Current Task — what the model is working on now
+ * - ## Latest User Message — verbatim quote (lossless)
+ * - ## Current Task — what the model is working on now (lossless)
  * - ## Key Decisions — decisions with rationale
  * - ## Next Steps — what should happen next
- * - ## Critical Context — file paths, errors, code snippets
- * - ## Note — trust signal: raw messages > summary for recent content
+ * - ## Recall Keys — verbatim search terms for pruned content (with "use when" triggers)
+ * - ## Note — trust hierarchy + nudge to recall rather than reconstruct
  */
 export function buildSummaryPrompt(options: SummaryPromptOptions): string {
-	const { latestUserMessage, conversationText, previousSummary } = options;
+	const { latestUserMessage, conversationText, previousSummary, targetWords, recallKeyBudget } = options;
 
 	const prevCtx = previousSummary
 		? `
-Update this existing summary with new information. Preserve all existing information, add new progress, and update the Progress section.
+Update this existing summary. Prune items that no longer carry unresolved intent and demote them into Recall Keys as verbatim phrases; add new progress; update the Progress, Current Task, and Next Steps sections. Keep Standing Notes and Recall Keys that are still relevant.
 
 Previous summary:
 ${previousSummary}
@@ -36,14 +46,31 @@ ${previousSummary}
 		: "";
 
 	return `You are a conversation summarizer. ${prevCtx}
-Create a structured summary of this conversation. Use EXACTLY this format:
+Create a structured summary of this conversation.
+
+Compression rules:
+- Length: keep the whole summary to roughly ${targetWords} words (a target, not a hard limit; stay within ±20%).
+- Lossless: keep the Latest User Message, the Current Task, and any user-stated preference or constraint the current work depends on, complete and intact.
+- Lossy: compress finished work, superseded approaches, and background detail that is no longer actively referenced.
+- Demote, don't delete: anything you compress or drop from the body must appear in Recall Keys as a verbatim phrase so it can be retrieved later with vcc_recall. Never silently delete information that might be needed again.
+- Standing Notes: include only durable items (user preferences, lessons, routines) that still matter; prune obsolete ones. Record every user-stated constraint, even a minor one, as a Pref if it could affect future actions.
+- Recall Keys: at most ${recallKeyBudget} groups. Each group is a short topic label, a "use when" trigger (1–5 words describing the need it answers — a menu label, not a search term), and 1–3 short verbatim phrases taken exactly from the conversation. Phrases must be punctuation-free and distinctive; a phrase that appears exactly in the conversation matches reliably.
+- File paths, error messages, and snippets still needed for the current task stay inline (Current Task / Next Steps); older ones become Recall Keys.
+
+Use EXACTLY this format:
 
 ## Original Request
 [What the user originally asked for — the first user message's intent]
 
+## Standing Notes
+- Pref: [user-stated preference or constraint]
+- Lesson: [what was learned, and why it matters]
+- Routine: [repeated procedure worth remembering]
+(If none apply, write "None".)
+
 ## Progress
 ### Done
-- [x] [Completed tasks, decisions, deliverables]
+- [x] [Completed tasks, decisions, deliverables — terse]
 
 ### In Progress
 - [ ] [Current work based on the latest user message]
@@ -52,19 +79,22 @@ Create a structured summary of this conversation. Use EXACTLY this format:
 "${latestUserMessage}"
 
 ## Current Task
-[What the model is currently working on, based on the latest user message and recent assistant work]
+[What the model is currently working on — keep complete and lossless]
 
 ## Key Decisions
-- **[Decision]**: [Rationale]
+- **[Decision]**: [terse rationale]
 
 ## Next Steps
 1. [What should happen next]
 
-## Critical Context
-- [File paths, error messages, code snippets, data needed to continue]
+## Recall Keys
+- **[topic]** (use when [1–5 word trigger]): "verbatim phrase", "verbatim phrase"
 
 ## Note
-Verbatim raw messages from the cut point onward follow this summary in the model's context. Trust the raw messages over this summary for recent tool outputs, file paths, code snippets, and exact values. This summary provides context and coherence; the raw messages are the ground truth for recent content.
+Fresh raw messages follow this summary — trust them for recent content.
+For older detail not in the fresh messages:
+- Check the Recall Keys first. If a key matches what you need, call vcc_recall with that exact phrase and use the recalled text. Do NOT reconstruct it from memory or reasoning — a recalled fact beats a remembered one; the recalled text is the ground truth.
+- Answer from your own knowledge only if no key or raw message covers it, and say so explicitly.
 
 <conversation>
 ${conversationText}
