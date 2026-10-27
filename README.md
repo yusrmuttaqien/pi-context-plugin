@@ -29,7 +29,7 @@ The hybrid compaction fixes that by:
 The summary is intentionally **lossy**: it carries intent (what's done, what's open, what's decided) rather than a verbatim transcript. That is safe because `vcc_recall` provides full-fidelity recall of the pre-compaction conversation on demand — the summary is an index, `vcc_recall` is the archive.
 
 - Active work (latest message, current task, user constraints) stays **lossless**
-- Dormant detail is **demoted, not deleted**: it becomes verbatim Recall Keys that map topics to search terms
+- Dormant detail is **demoted, not deleted**: important pruned detail becomes verbatim Recall Keys — an index, not an archive, since anything not indexed is still recoverable with a free-form `vcc_recall` search
 - A **trust hierarchy** tells the model to recall before reconstructing: raw messages > recalled text > summary > its own memory
 - When recalling pre-compaction content, the prompt tells the model to use `vcc_recall` with `scope: "all"` — that content is off the current conversation path, and the default `lineage` scope only auto-widens when nothing matches in the current context (so generic terms can be hijacked)
 
@@ -57,6 +57,28 @@ LLM call (same model as chat)
 ```
 
 The summary the LLM produces is lossy by design: it keeps active work lossless, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled by a word target (injected into the prompt) with an auto-sized token cap as a backstop — see Configuration for the knobs.
+
+### Summary format
+
+The sections are ordered so the ones the model needs most survive a truncation, with the expendable history last:
+
+1. **Original Request** — the first user message's intent
+2. **Standing Notes** — durable preferences, lessons, and routines
+3. **Latest User Message** — verbatim (lossless)
+4. **Current Task** — what the model is working on now (lossless)
+5. **In Progress** — work started but not finished
+6. **Key Decisions** — decisions with rationale
+7. **Next Steps** — what should happen next
+8. **Recall Keys** — verbatim search terms for pruned detail (with "use when" triggers)
+9. **Note** — the trust hierarchy and recall guidance
+10. **Done** — compressed history (last, so a truncation hits it first)
+
+**Done** is the section most prone to bloat, so it is tightly constrained:
+- Collapsed into **at most 6 thematic bullets** — one per theme, not per step.
+- Each bullet is a **complete, verifiable claim**: what was done plus a checkable outcome (a count, a committed/pushed/passing state, or a specific finding with its basis).
+- **Conclusions, not steps**: it records what was determined, not the sequence of actions.
+- **Hard boundary**: a bullet is "done" only if it is finished *and* you can state how you know. Anything not finished-and-verified belongs in **In Progress** (bias to In Progress when in doubt) — this stops the model from spiraling back into re-investigating work it wrongly marked done.
+- **Throttled on update**: on later compactions the model re-compresses rather than appends — it merges new work into existing themes, updates existing bullets to their current state, prunes obsolete ones, and keeps Done at ≤ 6 bullets and about the same length. The list stays bounded across many compactions instead of growing without limit.
 
 ### Auto-rename
 
