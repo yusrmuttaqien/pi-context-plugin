@@ -11,9 +11,10 @@
  *
  * Key features:
  * - Uses the same model as the chat (ctx.model)
- * - Extracts the latest user message verbatim from branchEntries
- * - Branch-aware: uses branchEntries (current branch) for the latest user
- *   message
+ * - Extracts the latest *meaningful* user message verbatim from branchEntries
+ *   (branch-aware); bare continuations like "continue" or "ok" are skipped in
+ *   favor of the most recent substantive message, with a fallback to the
+ *   latest message when none is substantive
  * - Lossy summary: keeps active work lossless, compresses dormant content,
  *   and demotes pruned detail into verbatim Recall Keys for vcc_recall.
  * - Length control: word target (injected into the prompt) + auto-sized
@@ -29,6 +30,31 @@ import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-a
 import { buildSummaryPrompt } from "./prompts";
 import { piVccCompile, PI_VCC_COMPACT_INSTRUCTION, loadPiVccSettings } from "./pi-vcc";
 import { loadSettings } from "./settings";
+
+// Look back at most this many user messages when selecting the latest
+// meaningful one (skipping bare continuations like "continue" / "ok").
+const LATEST_USER_LOOKBACK = 5;
+
+// Bare acknowledgment/continuation tokens. A short message made up entirely
+// of these carries no new intent.
+const CONTINUATION_TOKENS = new Set([
+	"continue", "cont", "keep", "going", "go", "ahead", "proceed", "ok",
+	"okay", "yes", "yeah", "yep", "yup", "no", "nope", "sure", "alright",
+	"cool", "next", "done", "great", "thanks", "thank", "you", "please",
+	"lgtm", "hm", "hmm", "fine", "good", "sounds", "lets", "carry", "onward",
+]);
+
+// A message is a continuation if it is short (<= 4 words, <= 25 chars) and
+// made up entirely of continuation tokens (e.g. "continue", "ok",
+// "keep going", "yes please").
+function isContinuation(text: string): boolean {
+	const cleaned = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").trim();
+	if (!cleaned) return true;
+	if (cleaned.length > 25) return false;
+	const words = cleaned.split(/\s+/);
+	if (words.length > 4) return false;
+	return words.every((w) => CONTINUATION_TOKENS.has(w));
+}
 
 export function registerCompaction(pi: ExtensionAPI): void {
 	pi.on("session_before_compact", async (event, ctx) => {
@@ -103,18 +129,36 @@ export function registerCompaction(pi: ExtensionAPI): void {
 			: [...messagesToSummarize, ...turnPrefixMessages];
 		const conversationText = serializeConversation(convertToLlm(allMessages));
 
-		// 2. Extract the latest user message from branchEntries.
+		// 2. Extract the latest *meaningful* user message from branchEntries.
 		//    branchEntries is the current branch path — branch-aware by design.
-		let latestUserMessage = "";
-		for (let i = branchEntries.length - 1; i >= 0; i--) {
+		//    A bare continuation ("continue", "ok", "yes", ...) carries no new
+		//    intent, so we look back (up to LATEST_USER_LOOKBACK user messages)
+		//    for the most recent one that does. If every recent message is a
+		//    continuation, we fall back to the most recent one verbatim.
+		const recentUserMessages: string[] = [];
+		for (
+			let i = branchEntries.length - 1;
+			i >= 0 && recentUserMessages.length < LATEST_USER_LOOKBACK;
+			i--
+		) {
 			const e = branchEntries[i];
 			if (e.type === "message" && e.message.role === "user") {
-				latestUserMessage = e.message.content
+				const text = e.message.content
 					.filter((b): b is { type: "text"; text: string } => b.type === "text")
 					.map((b) => b.text)
 					.join(" ");
-				if (latestUserMessage) break;
+				if (text) recentUserMessages.push(text);
 			}
+		}
+		let latestUserMessage = "";
+		for (const text of recentUserMessages) {
+			if (!isContinuation(text)) {
+				latestUserMessage = text;
+				break;
+			}
+		}
+		if (!latestUserMessage) {
+			latestUserMessage = recentUserMessages[0] ?? "";
 		}
 
 		// 3. Build the hybrid summary prompt.

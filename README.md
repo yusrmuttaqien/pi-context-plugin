@@ -8,7 +8,8 @@ Three features:
 
 1. **Hybrid compaction** — replaces pi's default compaction with a lossy summary plus on-demand recall:
    - a compact rolling summary covering the entire conversation (not just the turn prefix)
-   - active work kept lossless: the latest user message, the current task, and user-stated constraints
+   - lossless anchors: the latest *meaningful* user message and the current task (never compressed); user-stated constraints are preserved in Standing Notes and take priority there
+   - per-section ceilings keep the summary bounded (see Summary format)
    - dormant detail demoted into verbatim **Recall Keys**, retrievable on demand with `vcc_recall`
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust hierarchy: raw messages > recalled text > summary > model memory
@@ -28,7 +29,7 @@ The hybrid compaction fixes that by:
 
 The summary is intentionally **lossy**: it carries intent (what's done, what's open, what's decided) rather than a verbatim transcript. That is safe because `vcc_recall` provides full-fidelity recall of the pre-compaction conversation on demand — the summary is an index, `vcc_recall` is the archive.
 
-- Active work (latest message, current task, user constraints) stays **lossless**
+- The latest *meaningful* user message and the current task stay **lossless**; user-stated constraints are preserved in Standing Notes (capped, but prioritized there)
 - Dormant detail is **demoted, not deleted**: important pruned detail becomes verbatim Recall Keys — an index, not an archive, since anything not indexed is still recoverable with a free-form `vcc_recall` search
 - A **trust hierarchy** tells the model to recall before reconstructing: raw messages > recalled text > summary > its own memory
 - When recalling pre-compaction content, the prompt tells the model to use `vcc_recall` with `scope: "all"` — that content is off the current conversation path, and the default `lineage` scope only auto-widens when nothing matches in the current context (so generic terms can be hijacked)
@@ -56,29 +57,35 @@ LLM call (same model as chat)
 └─────────────────────┴─────────────────────┘
 ```
 
-The summary the LLM produces is lossy by design: it keeps active work lossless, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled by a word target (injected into the prompt) with an auto-sized token cap as a backstop — see Configuration for the knobs.
+The summary the LLM produces is lossy by design: it keeps the lossless anchors (latest meaningful user message, current task) intact, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled three ways — a word target (soft guide for the whole summary), per-section ceilings (hard caps), and an auto-sized token cap (API backstop). See Configuration and Summary format for the details.
 
 ### Summary format
 
-The sections are ordered so the ones the model needs most survive a truncation, with the expendable history last:
+The sections are ordered so the ones the model needs most survive a truncation, with the expendable history last. Lossy sections carry a hard ceiling; the two lossless anchors are marked:
 
 1. **Original Request** — the first user message's intent
-2. **Standing Notes** — durable preferences, lessons, and routines
-3. **Latest User Message** — verbatim (lossless)
+2. **Standing Notes** — durable preferences, lessons, and routines (≤ 10)
+3. **Latest User Message** — verbatim quote of the latest *meaningful* user message (lossless)
 4. **Current Task** — what the model is working on now (lossless)
-5. **In Progress** — work started but not finished
-6. **Key Decisions** — decisions with rationale
-7. **Next Steps** — what should happen next
-8. **Recall Keys** — verbatim search terms for pruned detail (with "use when" triggers)
+5. **In Progress** — work started but not finished (≤ 5)
+6. **Key Decisions** — decisions with rationale (≤ 10)
+7. **Next Steps** — what should happen next (≤ 5)
+8. **Recall Keys** — verbatim search terms for pruned detail, with "use when" triggers (≤ `recallKeyBudget` groups)
 9. **Note** — the trust hierarchy and recall guidance
-10. **Done** — compressed history (last, so a truncation hits it first)
+10. **Done** — compressed history (≤ 6, last, so a truncation hits it first)
 
-**Done** is the section most prone to bloat, so it is tightly constrained:
-- Collapsed into **at most 6 thematic bullets** — one per theme, not per step.
-- Each bullet is a **complete, verifiable claim**: what was done plus a checkable outcome (a count, a committed/pushed/passing state, or a specific finding with its basis).
-- **Conclusions, not steps**: it records what was determined, not the sequence of actions.
-- **Hard boundary**: a bullet is "done" only if it is finished *and* you can state how you know. Anything not finished-and-verified belongs in **In Progress** (bias to In Progress when in doubt) — this stops the model from spiraling back into re-investigating work it wrongly marked done.
-- **Throttled on update**: on later compactions the model re-compresses rather than appends — it merges new work into existing themes, updates existing bullets to their current state, prunes obsolete ones, and keeps Done at ≤ 6 bullets and about the same length. The list stays bounded across many compactions instead of growing without limit.
+**Length model.** The word target (`compactionTargetWords`) is a soft guide for the whole summary; each lossy section also has a hard ceiling, and the actual length is bounded by whichever is smaller (`min(word target, sum of ceilings + lossless sections)`). A very high word target is therefore a no-op — the ceilings bind and the extra budget goes unused. A tight target is what forces the model to allocate and cut. Dynamic, importance-based allocation across sections is a planned later stage; for now each section is simply filled as needed up to its ceiling.
+
+**Lossless anchors.** The Latest User Message and Current Task are never compressed — they anchor the current work and get as much space as they need. User-stated constraints that the current work depends on are preserved in Standing Notes and take priority there.
+
+**Latest *meaningful* user message.** A bare continuation ("continue", "ok", "yes") carries no intent, so the extractor skips it and uses the most recent substantive user message (looking back up to 5 user messages). If every recent message is a continuation, it falls back to the most recent one verbatim.
+
+**Cross-cutting rules.**
+- **Re-compress, don't append** — on later compactions the model merges new work into existing themes, updates existing bullets to their current state, prunes obsolete items, and keeps every section within its ceiling (the total stays about the same length, not longer).
+- **Overflow → Recall Keys** — anything that exceeds a ceiling or is dropped becomes a verbatim Recall Key (an index, not an archive; anything not indexed is still recoverable with a free-form `vcc_recall` search).
+- **Contradictions resolve to the latest** — if two statements conflict, the most recent wins and the superseded one is demoted to Recall Keys if worth keeping.
+
+**Done** is the section most prone to bloat, so each bullet is a **complete, verifiable claim** (what was done plus a checkable outcome), written as **conclusions, not steps**, with a **hard boundary**: a bullet is "done" only if it is finished *and* you can state how you know — anything not finished-and-verified belongs in **In Progress** (bias to In Progress when in doubt). This stops the model from spiraling back into re-investigating work it wrongly marked done.
 
 ### Auto-rename
 
@@ -134,7 +141,7 @@ This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable vi
 - `autonameSystemPromptPrefix` — injected at the start of the auto-rename system prompt. Default `""` (no injection).
 - `compactionSystemPromptPrefix` — injected as the system prompt for the compaction LLM call. Empty = no system prompt sent (the summary prompt itself is a user message). Default `""`.
 - `autonameRefreshTurns` — re-evaluate the session title every N settled turns. `0` = one-shot (name only after the first settled turn). Default `5`.
-- `compactionTargetWords` — target length (words) for the compaction summary, injected into the prompt so the model conditions on it. Default `600`.
+- `compactionTargetWords` — target length (words) for the compaction summary, injected into the prompt so the model conditions on it. It is a soft guide for the whole summary; each lossy section also has a hard ceiling, so the actual length is bounded by whichever is smaller. A very high value is effectively a no-op (the ceilings bind); a tight value forces the model to allocate and cut. Default `600`.
 - `compactionMaxTokens` — hard API `maxTokens` for the summary call. `null` (default) = auto-sized from `compactionTargetWords × tokensPerWord × padding`. Set a number to override; a warning fires if it would bind before the word target is reached.
 - `tokensPerWord` — average tokens per word used to auto-size the cap. Raise for code-heavy sessions. Default `1.3`.
 - `padding` — multiplier on the auto-sized cap (headroom for imprecision + runaway). Default `2.0`.
@@ -169,6 +176,6 @@ pi-context-plugin/
 ## Notes
 
 - The summary uses the same model as the chat (`ctx.model`).
-- The latest user message is extracted from `branchEntries`, so compaction is branch-aware.
+- The latest user message is extracted from `branchEntries` (branch-aware) and is the latest *meaningful* one — bare continuations like "continue" or "ok" are skipped in favor of the most recent substantive message, with a fallback to the latest message when none is substantive.
 - The summary is lossy by design; `vcc_recall` is the fidelity layer. Recall Keys are verbatim search terms, so they match the raw JSONL regardless of which compaction tier wrote the summary — recall survives the tier-2/tier-3 fallback.
 - If the summary LLM call fails, pi-vcc's algorithmic `compile()` runs as a fallback. If the submodule is not checked out, the extension throws, matching pi's default compaction behavior.

@@ -19,21 +19,30 @@ export interface SummaryPromptOptions {
  *
  * The summary is intentionally lossy: it carries intent (what's done, what's
  * open, what's decided) while dormant detail is demoted into verbatim Recall
- * Keys that can be retrieved on demand with vcc_recall. Active work
- * (Latest User Message, Current Task, user-stated constraints) stays lossless.
+ * Keys that can be retrieved on demand with vcc_recall. The Latest User
+ * Message and Current Task stay lossless; user-stated constraints are
+ * preserved in Standing Notes and take priority there.
  *
  * Format (critical sections first; the expendable "Done" history last, so a
  * truncation hits the history, not the active state):
  * - ## Original Request — the first user message's intent
- * - ## Standing Notes — durable Pref / Lesson / Routine items
- * - ## Latest User Message — verbatim quote (lossless)
+ * - ## Standing Notes — durable Pref / Lesson / Routine items (capped, lossy)
+ * - ## Latest User Message — verbatim quote of the latest *meaningful* user
+ *   message (lossless; bare continuations like "continue" are skipped)
  * - ## Current Task — what the model is working on now (lossless)
- * - ## In Progress — work started but not finished (anything not verified-done)
- * - ## Key Decisions — decisions with rationale
- * - ## Next Steps — what should happen next
- * - ## Recall Keys — verbatim search terms for pruned content (with "use when" triggers)
+ * - ## In Progress — work started but not finished (capped, lossy)
+ * - ## Key Decisions — decisions with rationale (capped, lossy)
+ * - ## Next Steps — what should happen next (capped, lossy)
+ * - ## Recall Keys — verbatim search terms for pruned content (capped by budget)
  * - ## Note — trust hierarchy + nudge to recall rather than reconstruct
  * - ## Done — compressed, verifiable, capped history (last; sacrificed on truncation)
+ *
+ * Length model: the word target is a soft guide for the whole summary; each
+ * lossy section also has a hard ceiling, and the actual length is bounded by
+ * whichever is smaller. Latest User Message and Current Task are never
+ * compressed. Cross-cutting rules: re-compress on update (don't append),
+ * overflow/superseded detail demotes to Recall Keys, and contradictions are
+ * resolved in favor of the most recent statement.
  */
 export function buildSummaryPrompt(options: SummaryPromptOptions): string {
 	const { latestUserMessage, conversationText, previousSummary, targetWords, recallKeyBudget } = options;
@@ -41,12 +50,10 @@ export function buildSummaryPrompt(options: SummaryPromptOptions): string {
 	const prevCtx = previousSummary
 		? `
 Update this existing summary by RE-COMPRESSING it, not by appending to it.
-- Merge new work into an existing theme where it fits; add a Done bullet only for genuinely new work that fits no existing theme.
-- Update existing Done bullets to their current state ("proposed X" becomes "X done, committed").
-- Prune Done bullets no longer relevant to the current work; demote their key detail into Recall Keys.
-- Keep Done at at most 6 bullets; if it exceeds 6, merge or prune until it fits.
-- Keep Standing Notes and Recall Keys that are still relevant; prune obsolete ones.
-- The result should be about the same length as the previous summary, not longer.
+- Merge new work into an existing theme; update existing bullets to their current state ("proposed X" becomes "X done, committed").
+- Prune obsolete and superseded items; resolve contradictions in favor of the current (most recent) state.
+- Keep every section within its ceiling, and keep the total about the same length as the previous summary, not longer.
+- Demote dropped or overflowing detail into Recall Keys; keep Standing Notes and Recall Keys that are still relevant.
 
 Previous summary:
 ${previousSummary}
@@ -56,15 +63,19 @@ ${previousSummary}
 	return `You are a conversation summarizer. ${prevCtx}
 Create a structured summary of this conversation.
 
-Compression rules:
-- Length: keep the whole summary to roughly ${targetWords} words (a target, not a hard limit; stay within ±20%).
-- Lossless: keep the Latest User Message, the Current Task, and any user-stated preference or constraint the current work depends on, complete and intact.
-- Lossy: compress finished work, superseded approaches, and background detail that is no longer actively referenced.
-- Done: collapse finished work into at most 6 thematic bullets, each a complete verifiable claim: what was done plus a checkable outcome (a count, a committed/pushed/passing state, or a specific finding with its basis). State conclusions, not a list of steps. A bullet is "done" only if it is finished AND you can state how you know; if you can't, it is not done and belongs in In Progress. When in doubt, In Progress.
-- Details that don't fit a bullet (file lists, histograms, PR numbers, flag names) become Recall Keys. You do NOT need to index everything — anything not in the summary is still recoverable with a free-form vcc_recall search, so index only the detail most likely to be needed again.
-- Standing Notes: include only durable items (user preferences, lessons, routines) that still matter; prune obsolete ones. Record every user-stated constraint, even a minor one, as a Pref if it could affect future actions.
-- Recall Keys: at most ${recallKeyBudget} groups. Each group is a short topic label, a "use when" trigger (1–5 words describing the need it answers — a menu label, not a search term), and 1–3 short verbatim phrases taken exactly from the conversation. Phrases must be punctuation-free and distinctive; a phrase that appears exactly in the conversation matches reliably.
-- File paths, error messages, and snippets still needed for the current task stay inline (Current Task / Next Steps); older ones become Recall Keys.
+Length and allocation:
+- Aim for roughly ${targetWords} words total. This is a soft guide for the whole summary; each lossy section also has a hard ceiling, and the actual length is bounded by whichever is smaller.
+- Never compress the Latest User Message or the Current Task — they anchor the current work and get as much space as they need.
+- Everything else is compressible and capped: Standing Notes ≤ 10, Key Decisions ≤ 10, Done ≤ 6, In Progress ≤ 5, Next Steps ≤ 5, Recall Keys ≤ ${recallKeyBudget} groups. Fill each as needed, up to its ceiling. User-stated constraints that the current work depends on go in Standing Notes and take priority there.
+
+Content rules:
+- Done: at most 6 thematic bullets, each a complete verifiable claim: what was done plus a checkable outcome (a count, a committed/pushed/passing state, or a specific finding with its basis). Conclusions, not steps. A bullet is "done" only if it is finished AND you can state how you know; if you can't, it is not done and belongs in In Progress. When in doubt, In Progress.
+- Standing Notes: durable preferences, lessons, and routines only. Merge related items; prune obsolete ones. User-stated constraints that the current work depends on take priority here.
+- Key Decisions: each states the decision plus a terse why. Merge related decisions; prune superseded ones.
+- Contradictions: if two statements conflict, keep the most recent and drop the one it supersedes; demote the dropped history to Recall Keys if worth keeping.
+- Overflow: anything that exceeds a ceiling or is dropped becomes a verbatim Recall Key (an index, not an archive — anything not indexed is still recoverable with a free-form vcc_recall search).
+- Recall Keys: at most ${recallKeyBudget} groups. Each group is a short topic label, a "use when" trigger (1–5 words describing the need it answers — a menu label, not a search term), and 1–3 short verbatim phrases taken exactly from the conversation. Phrases must be punctuation-free and distinctive.
+- Inline detail: file paths, error messages, and snippets still needed for the current task stay inline (Current Task / Next Steps); older ones become Recall Keys.
 
 Use EXACTLY this format:
 
