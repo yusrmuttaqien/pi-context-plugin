@@ -16,6 +16,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildRenamePrompt, RENAME_NO_CHANGE } from "./prompts";
 import { loadSettings } from "./settings";
+import { readAutonameState } from "./autoname-toggle";
 
 /** Per-message cap for the naming call — titles only need a slice of each message. */
 const TITLE_MESSAGE_CAP = 500;
@@ -48,14 +49,26 @@ function selectMessagesForTitle(userMessages: string[]): string[] {
 export function registerAutoRename(pi: ExtensionAPI): void {
 	let settledCount = 0;
 	let currentTitle: string | null = null;
+	let wasEnabled = true; // mirrors the persisted state; used to detect re-enable
 
 	pi.on("agent_settled", async (_event, ctx) => {
 		settledCount++;
 
+		// Auto-rename is a per-session, user-toggleable feature. Read the
+		// persisted state (custom entry) each turn; when disabled, skip
+		// naming entirely. Re-enabling forces one immediate rename so the
+		// title doesn't sit stale until the next refreshTurns boundary.
+		const enabled = readAutonameState(ctx.sessionManager);
+		const isReEnable = enabled && !wasEnabled;
+		wasEnabled = enabled;
+		if (!enabled) return;
+
 		const { autoname } = loadSettings();
 		const isFirst = currentTitle === null;
 		const due =
-			isFirst || (autoname.refreshTurns > 0 && settledCount % autoname.refreshTurns === 0);
+			isFirst ||
+			isReEnable ||
+			(autoname.refreshTurns > 0 && settledCount % autoname.refreshTurns === 0);
 		if (!due) return;
 
 		const model = ctx.model;

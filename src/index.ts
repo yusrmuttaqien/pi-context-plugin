@@ -3,7 +3,8 @@
  *
  * Registers:
  * - Hybrid compaction (src/compaction.ts)
- * - Session auto-rename (src/auto-rename.ts)
+ * - Session auto-rename (src/auto-rename.ts), with a per-session
+ *   /autoname toggle (src/autoname-toggle.ts)
  * - pi-vcc (vendored submodule): vcc_recall tool, /pi-vcc and
  *   /pi-vcc-recall commands, settings scaffolding, and its own
  *   session_before_compact hook
@@ -20,6 +21,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoRename } from "./auto-rename";
+import { registerAutonameToggle } from "./autoname-toggle";
 import { registerCompaction } from "./compaction";
 import { piVccExtension } from "./pi-vcc";
 import { scaffoldSettings } from "./settings";
@@ -27,6 +29,7 @@ import { scaffoldSettings } from "./settings";
 export default function (pi: ExtensionAPI) {
 	scaffoldSettings();
 	registerAutoRename(pi);
+	registerAutonameToggle(pi);
 	registerCompaction(pi);
 	piVccExtension(pi);
 }
