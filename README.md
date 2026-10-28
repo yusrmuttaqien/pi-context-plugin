@@ -14,7 +14,7 @@ Three features:
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust hierarchy: raw messages > recalled text > summary > model memory
 
-2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autonameRefreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent.
+2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent.
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
 
 ## Why
@@ -57,7 +57,7 @@ LLM call (same model as chat)
 └─────────────────────┴─────────────────────┘
 ```
 
-The summary the LLM produces is lossy by design: it keeps the lossless anchors (latest meaningful user message, current task) intact, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled three ways — a word target (soft guide for the whole summary), per-section ceilings (hard caps), and an auto-sized token cap (API backstop). See Configuration and Summary format for the details.
+The summary the LLM produces is lossy by design: it keeps the lossless anchors (latest meaningful user message, current task) intact, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled by per-section item ceilings (hard caps) plus a fixed `maxTokens` backstop against runaway — there is no separate word target. See Configuration and Summary format for the details.
 
 ### Summary format
 
@@ -70,11 +70,11 @@ The sections are ordered so the ones the model needs most survive a truncation, 
 5. **In Progress** — work started but not finished (≤ 5)
 6. **Key Decisions** — decisions with rationale (≤ 10)
 7. **Next Steps** — what should happen next (≤ 5)
-8. **Recall Keys** — verbatim search terms for pruned detail, with "use when" triggers (≤ `recallKeyBudget` groups)
+8. **Recall Keys** — verbatim search terms for pruned detail, with "use when" triggers (≤ 10 groups)
 9. **Note** — the trust hierarchy and recall guidance
 10. **Done** — compressed history (≤ 6, last, so a truncation hits it first)
 
-**Length model.** The word target (`compactionTargetWords`) is a soft guide for the whole summary; each lossy section also has a hard ceiling, and the actual length is bounded by whichever is smaller (`min(word target, sum of ceilings + lossless sections)`). A very high word target is therefore a no-op — the ceilings bind and the extra budget goes unused. A tight target is what forces the model to allocate and cut. Dynamic, importance-based allocation across sections is a planned later stage; for now each section is simply filled as needed up to its ceiling.
+**Length model.** There is no separate word target. Each lossy section has a hard **item ceiling** (a cap on how many items it may hold — the numbers in the list above are the defaults, configurable via `compaction.ceilings`), and the prompt tells the model to keep items terse and the whole summary concise. The two lossless anchors (Latest User Message, Current Task) are uncapped. `compaction.maxTokens` is a separate API backstop that only bounds runaway generation — it is not a length target. Detail that doesn't fit a section is demoted to Recall Keys, where it stays retrievable with `vcc_recall`. Because the budget is per-section, there is no single global number to tune — raise a ceiling (or `maxTokens`) to let a section hold more.
 
 **Lossless anchors.** The Latest User Message and Current Task are never compressed — they anchor the current work and get as much space as they need. User-stated constraints that the current work depends on are preserved in Standing Notes and take priority there.
 
@@ -90,7 +90,7 @@ The sections are ordered so the ones the model needs most survive a truncation, 
 ### Auto-rename
 
 ```
-First agent_settled, then every autonameRefreshTurns settled turns
+First agent_settled, then every autoname.refreshTurns settled turns
     ↓
 Select user messages: first + up to 3 sampled middle + last 3 (each capped at 500 chars)
     ↓
@@ -123,29 +123,48 @@ The two before-compact hooks coexist because pi's runner keeps the **last non-nu
 
 ## Configuration
 
-This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable via `PI_CONTEXT_PLUGIN_CONFIG_PATH`), structurally identical to pi-vcc's config: created on first load, missing keys filled in, existing values preserved.
+This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable via `PI_CONTEXT_PLUGIN_CONFIG_PATH`): created on first load, missing keys filled in, existing values preserved. Settings are namespaced by feature. Old flat keys (`compactionTargetWords`, `compactionMaxTokens`, `recallKeyBudget`, `autonameSystemPromptPrefix`, `autonameRefreshTurns`, `compactionSystemPromptPrefix`, `tokensPerWord`, `padding`) are migrated into this structure automatically; the removed word-target knobs (`compactionTargetWords`, `tokensPerWord`, `padding`) are dropped.
 
 ```json
 {
-  "autonameSystemPromptPrefix": "",
-  "compactionSystemPromptPrefix": "",
-  "autonameRefreshTurns": 5,
-  "compactionTargetWords": 600,
-  "compactionMaxTokens": null,
-  "tokensPerWord": 1.3,
-  "padding": 2.0,
-  "recallKeyBudget": 10
+  "autoname": {
+    "systemPromptPrefix": "",
+    "refreshTurns": 5
+  },
+  "compaction": {
+    "systemPromptPrefix": "",
+    "maxTokens": 4000,
+    "ceilings": {
+      "standingNotes": 10,
+      "keyDecisions": 10,
+      "inProgress": 5,
+      "nextSteps": 5,
+      "done": 6,
+      "recallKeys": 10
+    }
+  }
 }
 ```
 
-- `autonameSystemPromptPrefix` — injected at the start of the auto-rename system prompt. Default `""` (no injection).
-- `compactionSystemPromptPrefix` — injected as the system prompt for the compaction LLM call. Empty = no system prompt sent (the summary prompt itself is a user message). Default `""`.
-- `autonameRefreshTurns` — re-evaluate the session title every N settled turns. `0` = one-shot (name only after the first settled turn). Default `5`.
-- `compactionTargetWords` — target length (words) for the compaction summary, injected into the prompt so the model conditions on it. It is a soft guide for the whole summary; each lossy section also has a hard ceiling, so the actual length is bounded by whichever is smaller. A very high value is effectively a no-op (the ceilings bind); a tight value forces the model to allocate and cut. Default `600`.
-- `compactionMaxTokens` — hard API `maxTokens` for the summary call. `null` (default) = auto-sized from `compactionTargetWords × tokensPerWord × padding`. Set a number to override; a warning fires if it would bind before the word target is reached.
-- `tokensPerWord` — average tokens per word used to auto-size the cap. Raise for code-heavy sessions. Default `1.3`.
-- `padding` — multiplier on the auto-sized cap (headroom for imprecision + runaway). Default `2.0`.
-- `recallKeyBudget` — maximum number of Recall Key groups in the summary. Default `10`.
+### `autoname`
+
+- `autoname.systemPromptPrefix` — injected at the start of the auto-rename system prompt. Default `""` (no injection).
+- `autoname.refreshTurns` — re-evaluate the session title every N settled turns. `0` = one-shot (name only after the first settled turn). Default `5`.
+
+### `compaction`
+
+- `compaction.systemPromptPrefix` — injected as the system prompt for the compaction LLM call. Empty = no system prompt sent (the summary prompt itself is a user message). Default `""`.
+- `compaction.maxTokens` — hard API `maxTokens` for the summary call. A backstop against runaway generation, not a length target — the per-section ceilings are the real length control. Default `4000`.
+- `compaction.ceilings` — per-section **item** ceilings (max items per lossy section). Defaults:
+
+| Ceiling | Default | Section |
+|---|---|---|
+| `ceilings.standingNotes` | `10` | Standing Notes (Pref / Lesson / Routine items) |
+| `ceilings.keyDecisions` | `10` | Key Decisions |
+| `ceilings.inProgress` | `5` | In Progress |
+| `ceilings.nextSteps` | `5` | Next Steps |
+| `ceilings.done` | `6` | Done (thematic bullets) |
+| `ceilings.recallKeys` | `10` | Recall Keys (groups) |
 
 ## Usage
 

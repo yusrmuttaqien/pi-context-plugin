@@ -2,16 +2,16 @@
  * Prompt templates for pi-context-plugin.
  */
 
+import type { CompactionCeilings } from "./settings";
+
 // --- Hybrid compaction ---
 
 export interface SummaryPromptOptions {
 	latestUserMessage: string;
 	conversationText: string;
 	previousSummary?: string;
-	/** Word target injected into the prompt (the length the model should aim for). */
-	targetWords: number;
-	/** Maximum number of recall-key groups in the summary. */
-	recallKeyBudget: number;
+	/** Per-section item ceilings for the lossy summary sections. */
+	ceilings: CompactionCeilings;
 }
 
 /**
@@ -37,15 +37,17 @@ export interface SummaryPromptOptions {
  * - ## Note — trust hierarchy + nudge to recall rather than reconstruct
  * - ## Done — compressed, verifiable, capped history (last; sacrificed on truncation)
  *
- * Length model: the word target is a soft guide for the whole summary; each
- * lossy section also has a hard ceiling, and the actual length is bounded by
- * whichever is smaller. Latest User Message and Current Task are never
- * compressed. Cross-cutting rules: re-compress on update (don't append),
- * overflow/superseded detail demotes to Recall Keys, and contradictions are
- * resolved in favor of the most recent statement.
+ * Length model: each lossy section has a hard item ceiling (the number of
+ * items it may contain); the summary is kept concise overall, with the
+ * Latest User Message and Current Task never compressed. There is no separate
+ * word target — the ceilings plus terse-item guidance define the budget, and
+ * detail that doesn't fit is demoted to Recall Keys. Cross-cutting rules:
+ * re-compress on update (don't append), overflow/superseded detail demotes to
+ * Recall Keys, and contradictions are resolved in favor of the most recent
+ * statement.
  */
 export function buildSummaryPrompt(options: SummaryPromptOptions): string {
-	const { latestUserMessage, conversationText, previousSummary, targetWords, recallKeyBudget } = options;
+	const { latestUserMessage, conversationText, previousSummary, ceilings } = options;
 
 	const prevCtx = previousSummary
 		? `
@@ -64,17 +66,17 @@ ${previousSummary}
 Create a structured summary of this conversation.
 
 Length and allocation:
-- Aim for roughly ${targetWords} words total. This is a soft guide for the whole summary; each lossy section also has a hard ceiling, and the actual length is bounded by whichever is smaller.
+- Keep the summary concise: write only what's needed, keep each item terse, and never exceed a section's item ceiling.
 - Never compress the Latest User Message or the Current Task — they anchor the current work and get as much space as they need.
-- Everything else is compressible and capped: Standing Notes ≤ 10, Key Decisions ≤ 10, Done ≤ 6, In Progress ≤ 5, Next Steps ≤ 5, Recall Keys ≤ ${recallKeyBudget} groups. Fill each as needed, up to its ceiling. User-stated constraints that the current work depends on go in Standing Notes and take priority there.
+- Item ceilings: Standing Notes ≤ ${ceilings.standingNotes}, Key Decisions ≤ ${ceilings.keyDecisions}, Done ≤ ${ceilings.done}, In Progress ≤ ${ceilings.inProgress}, Next Steps ≤ ${ceilings.nextSteps}, Recall Keys ≤ ${ceilings.recallKeys} groups. Fill each as needed, up to its ceiling. User-stated constraints that the current work depends on go in Standing Notes and take priority there.
 
 Content rules:
-- Done: at most 6 thematic bullets, each a complete verifiable claim: what was done plus a checkable outcome (a count, a committed/pushed/passing state, or a specific finding with its basis). Conclusions, not steps. A bullet is "done" only if it is finished AND you can state how you know; if you can't, it is not done and belongs in In Progress. When in doubt, In Progress.
+- Done: at most ${ceilings.done} thematic bullets, each a complete verifiable claim: what was done plus a checkable outcome (a count, a committed/pushed/passing state, or a specific finding with its basis). Conclusions, not steps. A bullet is "done" only if it is finished AND you can state how you know; if you can't, it is not done and belongs in In Progress. When in doubt, In Progress.
 - Standing Notes: durable preferences, lessons, and routines only. Merge related items; prune obsolete ones. User-stated constraints that the current work depends on take priority here.
 - Key Decisions: each states the decision plus a terse why. Merge related decisions; prune superseded ones.
 - Contradictions: if two statements conflict, keep the most recent and drop the one it supersedes; demote the dropped history to Recall Keys if worth keeping.
 - Overflow: anything that exceeds a ceiling or is dropped becomes a verbatim Recall Key (an index, not an archive — anything not indexed is still recoverable with a free-form vcc_recall search).
-- Recall Keys: at most ${recallKeyBudget} groups. Each group is a short topic label, a "use when" trigger (1–5 words describing the need it answers — a menu label, not a search term), and 1–3 short verbatim phrases taken exactly from the conversation. Phrases must be punctuation-free and distinctive.
+- Recall Keys: at most ${ceilings.recallKeys} groups. Each group is a short topic label, a "use when" trigger (1–5 words describing the need it answers — a menu label, not a search term), and 1–3 short verbatim phrases taken exactly from the conversation. Phrases must be punctuation-free and distinctive.
 - Inline detail: file paths, error messages, and snippets still needed for the current task stay inline (Current Task / Next Steps); older ones become Recall Keys.
 
 Use EXACTLY this format:
@@ -114,7 +116,7 @@ For older detail not in the fresh messages:
 - Answer from your own knowledge only if no key, raw message, or recall covers it, and say so explicitly.
 
 ## Done
-- [x] [Theme]: [what was done + its checkable outcome: a count, a committed/pushed/passing state, or a specific finding with its basis]. One bullet per theme, not per step. Max 6 bullets.
+- [x] [Theme]: [what was done + its checkable outcome: a count, a committed/pushed/passing state, or a specific finding with its basis]. One bullet per theme, not per step. Max ${ceilings.done} bullets.
 (A bullet is "done" only if it is finished AND you can state how you know. If you can't, it is not done and belongs in In Progress. When in doubt, In Progress.)
 
 <conversation>

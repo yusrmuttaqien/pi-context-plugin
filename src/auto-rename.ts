@@ -9,7 +9,7 @@
  * — so a single chat that progresses to new topics keeps a name that tracks
  * where the conversation is now, not where it started. Both parts update as
  * the conversation moves. To support that, the naming call re-runs every
- * `autonameRefreshTurns` settled turns (0 = one-shot), and the model may
+ * `autoname.refreshTurns` settled turns (0 = one-shot), and the model may
  * respond NO_CHANGE when the current title still fits.
  */
 
@@ -52,10 +52,10 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 	pi.on("agent_settled", async (_event, ctx) => {
 		settledCount++;
 
-		const { autonameSystemPromptPrefix, autonameRefreshTurns } = loadSettings();
+		const { autoname } = loadSettings();
 		const isFirst = currentTitle === null;
 		const due =
-			isFirst || (autonameRefreshTurns > 0 && settledCount % autonameRefreshTurns === 0);
+			isFirst || (autoname.refreshTurns > 0 && settledCount % autoname.refreshTurns === 0);
 		if (!due) return;
 
 		const model = ctx.model;
@@ -85,8 +85,8 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 			currentTitle: currentTitle ?? undefined,
 		});
 
-		const systemPrompt = autonameSystemPromptPrefix.trim()
-			? `${autonameSystemPromptPrefix.trim()}\n\nYou generate short session titles. Respond with only the title.`
+		const systemPrompt = autoname.systemPromptPrefix.trim()
+			? `${autoname.systemPromptPrefix.trim()}\n\nYou generate short session titles. Respond with only the title.`
 			: "You generate short session titles. Respond with only the title.";
 
 		// Call the LLM.
