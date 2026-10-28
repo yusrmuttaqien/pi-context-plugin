@@ -14,7 +14,7 @@ Three features:
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust hierarchy: raw messages > recalled text > summary > model memory
 
-2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent. Can be toggled off per session with `/autoname`.
+2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent. Can be toggled off per session with `/autoname`, and run on demand with `/rename`.
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
 
 ## Why
@@ -113,6 +113,17 @@ Auto-rename is on by default. Turn it off for the current session and back on ag
 
 The state is stored as a per-session custom entry, so it survives restarts and `pi --resume`, is never sent to the LLM, and is still readable after compaction. While disabled, a footer status reads `autoname: off` (cleared when re-enabled). Each session has its own state, so toggling here doesn't affect other sessions.
 
+### `/rename` — run the auto-rename now
+
+`/rename` runs the LLM naming pass on demand, without waiting for the next `autoname.refreshTurns` boundary. It works even when `/autoname` is off, since it is an explicit user action. It reuses the exact same naming logic as the background handler (same prompt, same message selection, same `NO_CHANGE` handling) and reports the outcome:
+
+- renamed → `Session renamed to: <title>`
+- `NO_CHANGE` (the current title still fits) → `Auto-rename: no change`
+- no user messages yet → `Auto-rename: nothing to rename yet`
+- LLM failure → `Auto-rename: no title produced`
+
+The current title is read from the session (authoritative, survives restarts), so the model can keep a good name instead of overwriting it.
+
 ### pi-vcc integration
 
 pi-vcc is a standard pi extension, so this plugin calls its default export with the same `ExtensionAPI`. Everything pi-vcc registers becomes available through this one extension:
@@ -193,7 +204,7 @@ pi-context-plugin/
 ├── src/
 │   ├── index.ts          # entry point, registers all features (order matters)
 │   ├── compaction.ts     # hybrid compaction handler
-│   ├── auto-rename.ts    # session auto-rename handler
+│   ├── auto-rename.ts    # session auto-rename handler + /rename command
 │   ├── autoname-toggle.ts  # /autoname command + per-session on/off state
 │   ├── pi-vcc.ts         # pi-vcc integration: full extension + compile() fallback
 │   ├── prompts.ts        # prompt builders (summary + rename)

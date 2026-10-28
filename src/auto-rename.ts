@@ -11,9 +11,13 @@
  * the conversation moves. To support that, the naming call re-runs every
  * `autoname.refreshTurns` settled turns (0 = one-shot), and the model may
  * respond NO_CHANGE when the current title still fits.
+ *
+ * The same naming logic is exposed as the `/rename` command, which runs the
+ * auto-rename on demand (it works even when `/autoname` is off, since it is an
+ * explicit user action) and reports the outcome to the user.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildRenamePrompt, RENAME_NO_CHANGE } from "./prompts";
 import { loadSettings } from "./settings";
 import { readAutonameState } from "./autoname-toggle";
@@ -46,33 +50,30 @@ function selectMessagesForTitle(userMessages: string[]): string[] {
 	return [first, ...sampled, ...recent];
 }
 
+/** Outcome of a naming attempt, reported by the `/rename` command. */
+type RenameOutcome =
+	| { status: "renamed"; name: string }
+	| { status: "no-change" }
+	| { status: "nothing" }
+	| { status: "error" };
+
 export function registerAutoRename(pi: ExtensionAPI): void {
 	let settledCount = 0;
 	let currentTitle: string | null = null;
 	let wasEnabled = true; // mirrors the persisted state; used to detect re-enable
 
-	pi.on("agent_settled", async (_event, ctx) => {
-		settledCount++;
-
-		// Auto-rename is a per-session, user-toggleable feature. Read the
-		// persisted state (custom entry) each turn; when disabled, skip
-		// naming entirely. Re-enabling forces one immediate rename so the
-		// title doesn't sit stale until the next refreshTurns boundary.
-		const enabled = readAutonameState(ctx.sessionManager);
-		const isReEnable = enabled && !wasEnabled;
-		wasEnabled = enabled;
-		if (!enabled) return;
+	/**
+	 * Run one naming pass: extract user messages, build the prompt, call the
+	 * LLM, and set the session name. Shared by the `agent_settled` handler
+	 * (silent) and the `/rename` command (reports the outcome). The current
+	 * title is read from the session manager (authoritative, survives
+	 * restarts) so the model can respond NO_CHANGE when the title still fits.
+	 */
+	async function runRename(ctx: ExtensionContext): Promise<RenameOutcome> {
+		const model = ctx.model;
+		if (!model) return { status: "error" };
 
 		const { autoname } = loadSettings();
-		const isFirst = currentTitle === null;
-		const due =
-			isFirst ||
-			isReEnable ||
-			(autoname.refreshTurns > 0 && settledCount % autoname.refreshTurns === 0);
-		if (!due) return;
-
-		const model = ctx.model;
-		if (!model) return;
 
 		// Extract user messages from the transcript.
 		const entries = ctx.sessionManager.buildContextEntries();
@@ -91,11 +92,11 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 			userMessages.push(text);
 		}
 
-		if (userMessages.length === 0) return;
+		if (userMessages.length === 0) return { status: "nothing" };
 
 		const prompt = buildRenamePrompt({
 			messages: selectMessagesForTitle(userMessages),
-			currentTitle: currentTitle ?? undefined,
+			currentTitle: ctx.sessionManager.getSessionName() ?? currentTitle ?? undefined,
 		});
 
 		const systemPrompt = autoname.systemPromptPrefix.trim()
@@ -132,9 +133,59 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 			if (name && name.toUpperCase() !== RENAME_NO_CHANGE.toUpperCase()) {
 				pi.setSessionName(name);
 				currentTitle = name;
+				return { status: "renamed", name };
 			}
+			return { status: "no-change" };
 		} catch {
-			// Silently fail — naming is best-effort.
+			// Naming is best-effort; surface a failure for the command to report.
+			return { status: "error" };
 		}
+	}
+
+	pi.on("agent_settled", async (_event, ctx) => {
+		settledCount++;
+
+		// Auto-rename is a per-session, user-toggleable feature. Read the
+		// persisted state (custom entry) each turn; when disabled, skip
+		// naming entirely. Re-enabling forces one immediate rename so the
+		// title doesn't sit stale until the next refreshTurns boundary.
+		const enabled = readAutonameState(ctx.sessionManager);
+		const isReEnable = enabled && !wasEnabled;
+		wasEnabled = enabled;
+		if (!enabled) return;
+
+		const { autoname } = loadSettings();
+		const isFirst = currentTitle === null;
+		const due =
+			isFirst ||
+			isReEnable ||
+			(autoname.refreshTurns > 0 && settledCount % autoname.refreshTurns === 0);
+		if (!due) return;
+
+		// Silent — background naming is best-effort.
+		await runRename(ctx);
+	});
+
+	pi.registerCommand("rename", {
+		description:
+			"Run the auto-rename now (LLM-generated title). Works even when /autoname is off.",
+		handler: async (_args, ctx) => {
+			const result = await runRename(ctx);
+			if (!ctx.hasUI) return;
+			switch (result.status) {
+				case "renamed":
+					ctx.ui.notify(`Session renamed to: ${result.name}`, "info");
+					break;
+				case "no-change":
+					ctx.ui.notify("Auto-rename: no change (current title still fits)", "info");
+					break;
+				case "nothing":
+					ctx.ui.notify("Auto-rename: nothing to rename yet", "info");
+					break;
+				case "error":
+					ctx.ui.notify("Auto-rename: no title produced", "info");
+					break;
+			}
+		},
 	});
 }
