@@ -36,11 +36,11 @@ export async function pickAction(ctx: ExtensionContext): Promise<TopAction | nul
 export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<string | null> {
   // Resolve a user-typed path: ~ → home, relative → against cwd, absolute → as-is.
   const resolve = (raw: string): string => {
-    let p = raw.trim();
-    if (p === "~" || p.startsWith("~/")) p = os.homedir() + p.slice(1);
-    else if (p.startsWith("~")) p = os.homedir() + p.slice(1);
-    if (!path.isAbsolute(p)) p = path.resolve(cwd, p);
-    return p;
+    const p = raw.trim();
+    if (p === "~") return os.homedir();
+    if (p.startsWith("~")) return os.homedir() + p.slice(1);
+    if (path.isAbsolute(p)) return p;
+    return path.resolve(cwd, p);
   };
   if (ctx.hasUI) {
     return await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
@@ -51,44 +51,33 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
       let selectedSuggestion = -1;
       const refresh = () => {
         const raw = input.getValue().trim();
-        // Resolve the base directory for autocomplete.
-        let base: string;
-        let sub = "";
+        // Resolve to absolute path.
+        let abs: string;
         if (raw === "" || raw === "." || raw === "./") {
-          base = cwd;
-        } else if (raw === "~" || raw === "~/") {
-          base = os.homedir();
-        } else if (raw.startsWith("~/")) {
-          const rest = raw.slice(2);
-          const lastSlash = rest.lastIndexOf("/");
-          if (lastSlash === -1) { base = os.homedir(); sub = rest; }
-          else { base = os.homedir() + "/" + rest.slice(0, lastSlash); sub = rest.slice(lastSlash + 1); }
-        } else if (raw.startsWith("/")) {
-          const lastSlash = raw.lastIndexOf("/");
-          base = raw.slice(0, lastSlash) || "/";
-          sub = raw.slice(lastSlash + 1);
+          abs = cwd;
+        } else if (raw === "~") {
+          abs = os.homedir();
+        } else if (raw.startsWith("~")) {
+          abs = os.homedir() + raw.slice(1);
+        } else if (path.isAbsolute(raw)) {
+          abs = raw;
         } else {
-          // Relative path — resolve against cwd.
-          const resolved = path.resolve(cwd, raw);
-          const lastSlash = resolved.lastIndexOf("/");
-          base = resolved.slice(0, lastSlash) || "/";
-          sub = resolved.slice(lastSlash + 1);
+          abs = path.resolve(cwd, raw);
         }
+        // Split on last "/".
+        const lastSlash = abs.lastIndexOf("/");
+        const base = abs.slice(0, lastSlash + 1) || "/";
+        const filter = abs.slice(lastSlash + 1);
         fs
           .readdir(base, { withFileTypes: true })
           .then((entries) => {
             const dirs = entries
               .filter((e) => e.isDirectory() && !e.name.startsWith("."))
               .map((e) => e.name)
-              .filter((n) => n.startsWith(sub))
+              .filter((n) => n.startsWith(filter))
               .sort()
               .slice(0, 8);
-            // Build suggestion paths relative to what the user typed.
-            const prefix = raw === "" || raw === "." || raw === "./"
-              ? ""
-              : raw.endsWith("/") ? raw : raw + "/";
-            suggestions = dirs.map((n) => prefix + n);
-            // Auto-select the first suggestion.
+            suggestions = dirs.map((n) => base + n);
             selectedSuggestion = suggestions.length > 0 ? 0 : -1;
           })
           .catch(() => {
