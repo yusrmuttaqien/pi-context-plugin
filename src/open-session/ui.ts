@@ -78,7 +78,7 @@ export class WithHeader implements Component {
 // sessions, with the selection kept in view and a (n/total) indicator.
 export type ListRow =
   | { kind: "header"; text: string }
-  | { kind: "item"; value: string; label: string; description: string }
+  | { kind: "item"; value: string; label: string; description: string; dim?: boolean }
   | { kind: "spacer" };
 
 export interface ListStyles {
@@ -104,6 +104,7 @@ export class GroupedList implements Component {
   private confirming = false;
   private deleteTarget: string | null = null;
   private deleteLabel = "";
+  private showDescriptions = false;
 
   constructor(
     rows: ListRow[],
@@ -136,10 +137,14 @@ export class GroupedList implements Component {
     this.requestRender?.();
   }
 
+  private get effectiveMaxVisible(): number {
+    return this.showDescriptions ? Math.max(1, Math.floor(this.maxVisible / 2)) : this.maxVisible;
+  }
+
   private ensureVisible(): void {
     const selRow = this.itemRowIdx[this.selected];
     if (selRow < this.top) this.top = selRow;
-    else if (selRow >= this.top + this.maxVisible) this.top = selRow - this.maxVisible + 1;
+    else if (selRow >= this.top + this.effectiveMaxVisible) this.top = selRow - this.effectiveMaxVisible + 1;
     if (this.top < 0) this.top = 0;
   }
 
@@ -147,7 +152,7 @@ export class GroupedList implements Component {
     const total = this.itemRowIdx.length;
     if (total === 0) return [this.styles.noMatch("No sessions")];
     const lines: string[] = [];
-    const visible = this.rows.slice(this.top, this.top + this.maxVisible);
+    const visible = this.rows.slice(this.top, this.top + this.effectiveMaxVisible);
     for (let i = 0; i < visible.length; i++) {
       const rowIdx = this.top + i;
       const row = visible[i];
@@ -158,16 +163,26 @@ export class GroupedList implements Component {
       } else {
         const isSelected = this.itemRowIdx[this.selected] === rowIdx;
         const prefix = isSelected ? "→ " : "  ";
-        const label = isSelected ? this.styles.selected(row.label) : row.label;
-        const desc = row.description ? "  " + this.styles.dim(row.description) : "";
-        lines.push(prefix + label + desc);
+        const label = isSelected
+          ? this.styles.selected(row.label)
+          : row.dim
+            ? this.styles.dim(row.label)
+            : row.label;
+        lines.push(prefix + label);
+        if (this.showDescriptions && row.description) {
+          lines.push("    " + this.styles.dim(row.description));
+        }
       }
     }
     lines.push("");
-    lines.push(this.styles.scroll(`(${this.selected + 1}/${total})${this.onDelete ? "  ·  d: delete" : ""}`));
+    lines.push(this.styles.scroll(`(${this.selected + 1}/${total})${this.onDelete ? "  ·  d: delete" : ""}  ·  i: info`));
     if (this.confirming) {
       lines.push("");
-      lines.push(this.styles.selected(`Delete \u201c${this.deleteLabel}\u201d?  y/n`));
+      const prompt = `Delete \u201c${this.deleteLabel}\u201d?`;
+      for (const line of wrapTextWithAnsi(prompt, width)) {
+        lines.push(this.styles.selected(line));
+      }
+      lines.push(this.styles.selected("y/n"));
     }
     return lines;
   }
@@ -197,6 +212,12 @@ export class GroupedList implements Component {
         this.deleteLabel = row.label;
         this.requestRender?.();
       }
+      return;
+    }
+    if (data === "i") {
+      this.showDescriptions = !this.showDescriptions;
+      this.ensureVisible();
+      this.requestRender?.();
       return;
     }
     if (this.kb.matches(data, "tui.select.up")) {

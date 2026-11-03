@@ -10,6 +10,7 @@ export interface SessionRow {
   id: string;
   created: number;
   date: string;
+  hasConversation: boolean;
 }
 
 export async function readJsonl(file: string): Promise<{
@@ -17,17 +18,19 @@ export async function readJsonl(file: string): Promise<{
   id: string;
   created: number;
   name: string | null;
+  hasConversation: boolean;
 }> {
   let text: string;
   try {
     text = await fs.readFile(file, "utf8");
   } catch {
-    return { cwd: null, id: "", created: 0, name: null };
+    return { cwd: null, id: "", created: 0, name: null, hasConversation: false };
   }
   let cwd: string | null = null;
   let id = "";
   let created = 0;
   let name: string | null = null;
+  let hasConversation = false;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     let e: unknown;
@@ -36,16 +39,30 @@ export async function readJsonl(file: string): Promise<{
     } catch {
       continue;
     }
-    const o = e as { type?: string; version?: string; id?: string; created_at?: string; cwd?: string; name?: string };
+    const o = e as { type?: string; version?: string; id?: string; created_at?: string; timestamp?: string; cwd?: string; name?: string; message?: { role?: string } };
     if (o.type === "session" && typeof o.id === "string") {
       id = o.id;
-      if (o.created_at) created = Date.parse(o.created_at);
+      const ts = o.created_at ?? o.timestamp;
+      if (ts) created = Date.parse(ts);
       if (typeof o.cwd === "string") cwd = o.cwd;
     }
     const info = e as { type?: string; name?: string };
     if (info.type === "session_info" && typeof info.name === "string") name = info.name;
+    if (o.type === "message" && (o.message?.role === "user" || o.message?.role === "assistant")) {
+      hasConversation = true;
+    }
   }
-  return { cwd, id, created, name };
+  return { cwd, id, created, name, hasConversation };
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function formatSessionDate(created: number): string {
+  if (!created) return "—";
+  const d = new Date(created);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${WEEKDAYS[d.getDay()]}, ${pad(d.getDate())} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 export async function scanSessions(): Promise<SessionRow[]> {
@@ -75,7 +92,8 @@ export async function scanSessions(): Promise<SessionRow[]> {
         cwd: meta.cwd,
         id: meta.id,
         created: meta.created || 0,
-        date: meta.created ? new Date(meta.created).toISOString().slice(0, 10) : "—",
+        date: formatSessionDate(meta.created || 0),
+        hasConversation: meta.hasConversation,
       });
     }
   }

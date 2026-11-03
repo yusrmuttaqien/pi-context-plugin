@@ -26,7 +26,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoRename } from "./auto-rename";
 import { registerAutonameToggle } from "./autoname-toggle";
 import { registerCompaction } from "./compaction";
-import { registerOpenSession } from "./open-session";
+import { registerOpenSession, registerEmptySessionCleanup } from "./open-session";
 import { piVccExtension } from "./pi-vcc";
 import { scaffoldSettings } from "./settings";
 
@@ -36,5 +36,6 @@ export default function (pi: ExtensionAPI) {
 	registerAutonameToggle(pi);
 	registerCompaction(pi);
 	registerOpenSession(pi);
+	registerEmptySessionCleanup(pi);
 	piVccExtension(pi);
 }

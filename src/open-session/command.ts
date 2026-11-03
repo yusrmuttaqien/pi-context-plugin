@@ -28,11 +28,35 @@ async function deleteOld(oldFile: string, nctx: Nctx): Promise<void> {
   }
 }
 
-// A fresh session has no file on disk yet (pi only creates it on the first
-// user/assistant message), so there is nothing to delete.
+// A session file has a conversation when it contains at least one user or
+// assistant message entry. pi only writes the file once such a message
+// exists, so a file without one is a throwaway (header-only) session.
+async function fileHasConversation(file: string): Promise<boolean> {
+  return (await readJsonl(file)).hasConversation;
+}
+
+// A session is empty (nothing worth keeping or deleting) when it has no
+// conversation. A fresh session has no file yet; a "new in directory" session
+// has a header-only file. Both count as empty.
 async function currentIsEmpty(file: string | null): Promise<boolean> {
   if (!file) return true;
-  return await fs.stat(file).then(() => false).catch(() => true);
+  return !(await fileHasConversation(file));
+}
+
+// Delete a session file that has no conversation when its session ends. pi's
+// /new never writes a file until the first message, so an empty session leaves
+// no trace; our "new in directory" flow must write a header up front (so the
+// switch can derive the cwd), which leaves a header-only file. This removes
+// that file when the session ends without a conversation, matching /new. The
+// event fires before the session is disposed, so ctx.sessionManager still
+// points at the session being torn down.
+export function registerEmptySessionCleanup(pi: ExtensionAPI): void {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    const file = ctx.sessionManager?.getSessionFile?.();
+    if (!file) return;
+    if (await fileHasConversation(file)) return;
+    await fs.unlink(file).catch(() => {});
+  });
 }
 
 // Start a new session in a directory.

@@ -179,7 +179,8 @@ export async function pickSession(ctx: ExtensionContext, currentFile: string | n
           kind: "item",
           value: s.file,
           label: s.name ?? "(untitled)",
-          description: `${s.id.slice(0, 8)} · ${s.date}`,
+          description: `${s.id} · ${s.date}`,
+          dim: !s.hasConversation,
         });
       }
       pushed = true;
@@ -216,7 +217,7 @@ export async function pickSession(ctx: ExtensionContext, currentFile: string | n
             if (pushed2) newRows2.push({ kind: "spacer" });
             newRows2.push({ kind: "header", text: `▸ ${g.cwd}${isCur ? "  (current)" : ""}` });
             for (const s of others) {
-              newRows2.push({ kind: "item", value: s.file, label: s.name ?? "(untitled)", description: `${s.id.slice(0, 8)} · ${s.date}` });
+              newRows2.push({ kind: "item", value: s.file, label: s.name ?? "(untitled)", description: `${s.id} · ${s.date}`, dim: !s.hasConversation });
             }
             pushed2 = true;
           }
