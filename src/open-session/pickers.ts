@@ -92,6 +92,7 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
           const val = suggestions[selectedSuggestion] + "/";
           input.setValue(val);
           (input as unknown as { cursor: number }).cursor = val.length;
+          input.invalidate();
           refresh();
         }
       };
