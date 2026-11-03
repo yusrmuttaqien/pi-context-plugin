@@ -1,4 +1,6 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   Input,
   SelectList,
@@ -32,30 +34,62 @@ export async function pickAction(ctx: ExtensionContext): Promise<TopAction | nul
 }
 
 export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<string | null> {
+  // Resolve a user-typed path: ~ → home, relative → against cwd, absolute → as-is.
+  const resolve = (raw: string): string => {
+    let p = raw.trim();
+    if (p === "~" || p.startsWith("~/")) p = os.homedir() + p.slice(1);
+    else if (p.startsWith("~")) p = os.homedir() + p.slice(1);
+    if (!path.isAbsolute(p)) p = path.resolve(cwd, p);
+    return p;
+  };
   if (ctx.hasUI) {
     return await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
       const input = new Input();
       input.focused = true;
-      input.setValue(cwd);
+      // Start empty; cursor is at the end (position 0).
       let suggestions: string[] = [];
       let selectedSuggestion = -1;
       const refresh = () => {
-        const raw = input.getValue();
-        const lastSlash = raw.lastIndexOf("/");
-        const dirPart = raw.slice(0, lastSlash + 1);
-        const subPart = raw.slice(lastSlash + 1);
-        const base = dirPart || "/";
+        const raw = input.getValue().trim();
+        // Resolve the base directory for autocomplete.
+        let base: string;
+        let sub = "";
+        if (raw === "" || raw === "." || raw === "./") {
+          base = cwd;
+        } else if (raw === "~" || raw === "~/") {
+          base = os.homedir();
+        } else if (raw.startsWith("~/")) {
+          const rest = raw.slice(2);
+          const lastSlash = rest.lastIndexOf("/");
+          if (lastSlash === -1) { base = os.homedir(); sub = rest; }
+          else { base = os.homedir() + "/" + rest.slice(0, lastSlash); sub = rest.slice(lastSlash + 1); }
+        } else if (raw.startsWith("/")) {
+          const lastSlash = raw.lastIndexOf("/");
+          base = raw.slice(0, lastSlash) || "/";
+          sub = raw.slice(lastSlash + 1);
+        } else {
+          // Relative path — resolve against cwd.
+          const resolved = path.resolve(cwd, raw);
+          const lastSlash = resolved.lastIndexOf("/");
+          base = resolved.slice(0, lastSlash) || "/";
+          sub = resolved.slice(lastSlash + 1);
+        }
         fs
           .readdir(base, { withFileTypes: true })
           .then((entries) => {
             const dirs = entries
               .filter((e) => e.isDirectory() && !e.name.startsWith("."))
               .map((e) => e.name)
-              .filter((n) => n.startsWith(subPart))
+              .filter((n) => n.startsWith(sub))
               .sort()
               .slice(0, 8);
-            suggestions = dirs.map((n) => (dirPart ? dirPart + n : n));
-            if (selectedSuggestion >= suggestions.length) selectedSuggestion = -1;
+            // Build suggestion paths relative to what the user typed.
+            const prefix = raw === "" || raw === "." || raw === "./"
+              ? ""
+              : raw.endsWith("/") ? raw : raw + "/";
+            suggestions = dirs.map((n) => prefix + n);
+            // Auto-select the first suggestion.
+            selectedSuggestion = suggestions.length > 0 ? 0 : -1;
           })
           .catch(() => {
             suggestions = [];
@@ -104,7 +138,8 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
         if (keybindings.matches(data, "tui.select.confirm")) {
           complete();
           const p = input.getValue().trim();
-          done(p || null);
+          if (!p) { done(null); return; }
+          done(resolve(p));
           return;
         }
         if (keybindings.matches(data, "tui.select.cancel")) {
@@ -123,7 +158,8 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
     }, { overlay: true, overlayOptions: { anchor: "center", width: 60, margin: 2 } });
   }
   const p = await ctx.ui.input("New session directory (path):", cwd);
-  return p ? p : null;
+  if (!p) return null;
+  return resolve(p);
 }
 
 export async function pickSession(ctx: ExtensionContext, currentFile: string | null): Promise<string | null> {
