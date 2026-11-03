@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -42,6 +41,14 @@ async function newSessionInDir(
     ctx.ui.notify("Failed to create session.", "error");
     return;
   }
+  // Persist the header so SessionManager.open (used by switchSession) can
+  // derive the cwd from it. ctx.switchSession drops cwdOverride, and a fresh
+  // session file has no header on disk yet, so without this the cwd falls
+  // back to process.cwd() (the current directory).
+  const header = sm.getHeader();
+  if (header) {
+    await fs.writeFile(sessionFile, JSON.stringify(header) + "\n");
+  }
   await (ctx as unknown as {
     switchSession: (file: string, opts?: { cwdOverride?: string; withSession?: (n: Nctx) => Promise<void> }) => Promise<unknown>;
   }).switchSession(sessionFile, {
@@ -73,7 +80,7 @@ async function applyAction(
   if (action === "new-path") {
     const picked = prePickedPath || (await pickPath(ctx, cur.cwd));
     if (!picked) return;
-    const target = path.resolve(os.homedir(), picked);
+    const target = picked;
     const exists = await fs
       .stat(target)
       .then((s) => s.isDirectory())
