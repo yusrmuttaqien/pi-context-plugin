@@ -99,6 +99,11 @@ export class GroupedList implements Component {
   private kb: KeybindingsManager;
   private onSelect: (value: string) => void;
   private onCancel: () => void;
+  private onDelete?: (value: string, label: string) => Promise<void>;
+  private requestRender?: () => void;
+  private confirming = false;
+  private deleteTarget: string | null = null;
+  private deleteLabel = "";
 
   constructor(
     rows: ListRow[],
@@ -107,6 +112,8 @@ export class GroupedList implements Component {
     kb: KeybindingsManager,
     onSelect: (value: string) => void,
     onCancel: () => void,
+    onDelete?: (value: string, label: string) => Promise<void>,
+    requestRender?: () => void,
   ) {
     this.rows = rows;
     this.maxVisible = maxVisible;
@@ -114,8 +121,19 @@ export class GroupedList implements Component {
     this.kb = kb;
     this.onSelect = onSelect;
     this.onCancel = onCancel;
+    this.onDelete = onDelete;
+    this.requestRender = requestRender;
     this.itemRowIdx = rows.map((r, i) => (r.kind === "item" ? i : -1)).filter((i) => i >= 0);
     if (this.itemRowIdx.length > 0) this.top = Math.max(0, this.itemRowIdx[0] - 1);
+  }
+
+  setRows(rows: ListRow[]): void {
+    this.rows = rows;
+    this.itemRowIdx = rows.map((r, i) => (r.kind === "item" ? i : -1)).filter((i) => i >= 0);
+    this.selected = 0;
+    this.top = 0;
+    if (this.itemRowIdx.length > 0) this.top = Math.max(0, this.itemRowIdx[0] - 1);
+    this.requestRender?.();
   }
 
   private ensureVisible(): void {
@@ -146,10 +164,40 @@ export class GroupedList implements Component {
       }
     }
     lines.push(this.styles.scroll(`(${this.selected + 1}/${total})`));
+    if (this.confirming) {
+      lines.push("");
+      lines.push(this.styles.selected(`Delete \u201c${this.deleteLabel}\u201d?  y/n`));
+    }
     return lines;
   }
 
   handleInput(data: string): void {
+    if (this.confirming) {
+      if (data === "y" || this.kb.matches(data, "tui.select.confirm")) {
+        const target = this.deleteTarget!;
+        const label = this.deleteLabel;
+        this.confirming = false;
+        this.deleteTarget = null;
+        this.onDelete?.(target, label).then(() => {
+          this.requestRender?.();
+        });
+      } else if (data === "n" || this.kb.matches(data, "tui.select.cancel")) {
+        this.confirming = false;
+        this.deleteTarget = null;
+        this.requestRender?.();
+      }
+      return;
+    }
+    if (this.onDelete && data === "d") {
+      const row = this.rows[this.itemRowIdx[this.selected]];
+      if (row && row.kind === "item") {
+        this.confirming = true;
+        this.deleteTarget = row.value;
+        this.deleteLabel = row.label;
+        this.requestRender?.();
+      }
+      return;
+    }
     if (this.kb.matches(data, "tui.select.up")) {
       if (this.selected > 0) {
         this.selected--;

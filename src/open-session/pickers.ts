@@ -194,7 +194,37 @@ export async function pickSession(ctx: ExtensionContext, currentFile: string | n
         noMatch: (t) => theme.fg("warning", t),
         scroll: (t) => theme.fg("dim", t),
       };
-      const list = new GroupedList(listRows, maxVisible, styles, keybindings, (value) => done(value), () => done(null));
+      const list = new GroupedList(
+        listRows, maxVisible, styles, keybindings,
+        (value) => done(value),
+        () => done(null),
+        async (file, label) => {
+          await fs.unlink(file).catch(() => {});
+          // Re-scan and refresh the list.
+          const newRows = await scanSessions();
+          const newGroups = buildGroups(newRows, currentFile);
+          const newFlat = newGroups.flatMap((g) => g.sessions).filter((s) => s.file !== currentFile);
+          if (newFlat.length === 0) {
+            done(null);
+            return;
+          }
+          const newRows2: ListRow[] = [];
+          let pushed2 = false;
+          for (const g of newGroups) {
+            const isCur = g.sessions.some((s) => s.file === currentFile);
+            const others = g.sessions.filter((s) => s.file !== currentFile);
+            if (isCur && others.length === 0) continue;
+            if (pushed2) newRows2.push({ kind: "spacer" });
+            newRows2.push({ kind: "header", text: `▸ ${g.cwd}${isCur ? "  (current)" : ""}` });
+            for (const s of others) {
+              newRows2.push({ kind: "item", value: s.file, label: s.name ?? "(untitled)", description: `${s.id.slice(0, 8)} · ${s.date}` });
+            }
+            pushed2 = true;
+          }
+          list.setRows(newRows2);
+        },
+        () => tui.requestRender(),
+      );
       return new Panel(list, (t) => theme.fg("accent", t));
     }, { overlay: true, overlayOptions: { anchor: "center", width: "70%", maxHeight: "80%", margin: 2 } });
   }
