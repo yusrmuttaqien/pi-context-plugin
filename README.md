@@ -1,6 +1,6 @@
 # pi-context-plugin
 
-Hybrid compaction, auto-rename, and built-in pi-vcc extension for [pi](https://github.com/badlogic/pi-mono).
+Hybrid compaction, auto-rename, a session launcher, and built-in pi-vcc for [pi](https://github.com/badlogic/pi-mono).
 
 ## What it does
 
@@ -9,158 +9,70 @@ Four features:
 1. **Hybrid compaction** — replaces pi's default compaction with a lossy summary plus on-demand recall:
    - a compact rolling summary covering the entire conversation (not just the turn prefix)
    - lossless anchors: the latest *meaningful* user message and the current task (never compressed); user-stated constraints are preserved in Standing Notes and take priority there
-   - per-section ceilings keep the summary bounded (see Summary format)
+   - per-section ceilings keep the summary bounded (defaults in Configuration)
    - dormant detail demoted into verbatim **Recall Keys**, retrievable on demand with `vcc_recall`
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust hierarchy: raw messages > recalled text > summary > model memory
 
-2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent. Can be toggled off per session with `/autoname`, and run on demand with `/rename`.
+2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent. Toggle off per session with `/autoname`, run on demand with `/rename`.
+
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
+
 4. **Session launcher** — `/open` starts a new session (here or in a directory you type), opens an existing session, or deletes the current session and starts fresh.
 
 ## Why
 
-Pi's default compaction uses a `TURN_PREFIX_SUMMARIZATION_PROMPT` that captures only the "Original Request" (first user message of the turn). In long conversations with multiple follow-ups, this creates a stale anchor that biases the model toward the first task, causing confabulation (inventing questions the user never asked).
+Pi's session handling has three gaps this plugin fills:
 
-The hybrid compaction fixes that by:
-
-- Including the **latest user message verbatim** in the summary
-- Describing the **current task** based on the latest state
-- Adding a **trust signal** that tells the model which to prefer: raw messages for recent content, summary for coherence
-
-The summary is intentionally **lossy**: it carries intent (what's done, what's open, what's decided) rather than a verbatim transcript. That is safe because `vcc_recall` provides full-fidelity recall of the pre-compaction conversation on demand — the summary is an index, `vcc_recall` is the archive.
-
-- The latest *meaningful* user message and the current task stay **lossless**; user-stated constraints are preserved in Standing Notes (capped, but prioritized there)
-- Dormant detail is **demoted, not deleted**: important pruned detail becomes verbatim Recall Keys — an index, not an archive, since anything not indexed is still recoverable with a free-form `vcc_recall` search
-- A **trust hierarchy** tells the model to recall before reconstructing: raw messages > recalled text > summary > its own memory
-- When recalling pre-compaction content, the prompt tells the model to use `vcc_recall` with `scope: "all"` — that content is off the current conversation path, and the default `lineage` scope only auto-widens when nothing matches in the current context (so generic terms can be hijacked)
+- **Compaction drifts.** Pi's default compaction summarizes only the turn prefix, so in long multi-topic conversations it anchors on the first request and the model confabulates follow-ups that were never asked. The hybrid summary covers the whole conversation, keeps the latest meaningful user message and current task lossless, and adds a trust hierarchy so the model recalls rather than reconstructs.
+- **Sessions are nameless and unmanageable.** Pi gives sessions auto-generated filenames and has no single command to start one in a chosen directory or delete the current one. Auto-rename gives every session a `main topic: latest context` title; `/open` is a unified launcher for new / switch / delete.
+- **Recall needs a second install.** pi-vcc's `vcc_recall` tool is what makes compressed content recoverable, but installing pi-vcc separately would double-register the tool. This plugin vendors pi-vcc and registers it directly.
 
 ## How it works
 
 ### Hybrid compaction
 
-```
-Compaction triggers
-    ↓
-LLM call (same model as chat)
-    ↓
-┌─────────────────────┬─────────────────────┐
-│ Success             │ Failure             │
-│ → Return hybrid     │ → Call pi-vcc's     │
-│   summary           │   compile()         │
-│   (with trust        │   (algorithmic,     │
-│   signal)            │   no LLM)          │
-│                     │ → If pi-vcc fails   │
-│                     │   or is missing    │
-│                     │   → Throw error    │
-│                     │   (same as pi's   │
-│                     │   default)         │
-└─────────────────────┴─────────────────────┘
-```
+On `session_before_compact`, the plugin calls the chat's own model to summarize the whole conversation (the messages being compacted plus the recent raw window pi keeps verbatim). The output is a structured summary with ordered sections — critical state first, expendable "Done" history last — so a truncation hits history, not active work.
 
-The summary the LLM produces is lossy by design: it keeps the lossless anchors (latest meaningful user message, current task) intact, compresses dormant content, and demotes pruned detail into verbatim Recall Keys. Length is controlled by per-section item ceilings (hard caps) plus a fixed `maxTokens` backstop against runaway — there is no separate word target. See Configuration and Summary format for the details.
+- **Lossless anchors.** The latest *meaningful* user message (bare continuations like "continue" / "ok" are skipped, looking back up to 5 user messages) and the current task are never compressed.
+- **Bounded length.** Every other section has a hard per-item ceiling (defaults in Configuration); overflow and superseded detail are demoted to verbatim **Recall Keys**. `compaction.maxTokens` is only a runaway backstop, not a length target.
+- **Trust hierarchy.** The summary tells the model to prefer raw messages for recent content, `vcc_recall` (with `scope: "all"`, since pre-compaction content is off the current branch) for older detail, and its own memory only as a last resort.
+- **Fallback.** If the LLM call fails, it runs pi-vcc's algorithmic `compile()`; if that's unavailable (submodule not checked out), it throws — pi's default behavior.
 
-### Summary format
-
-The sections are ordered so the ones the model needs most survive a truncation, with the expendable history last. Lossy sections carry a hard ceiling; the two lossless anchors are marked:
-
-1. **Original Request** — the first user message's intent
-2. **Standing Notes** — durable preferences, lessons, and routines (≤ 10)
-3. **Latest User Message** — verbatim quote of the latest *meaningful* user message (lossless)
-4. **Current Task** — what the model is working on now (lossless)
-5. **In Progress** — work started but not finished (≤ 5)
-6. **Key Decisions** — decisions with rationale (≤ 10)
-7. **Next Steps** — what should happen next (≤ 5)
-8. **Recall Keys** — verbatim search terms for pruned detail, with "use when" triggers (≤ 10 groups)
-9. **Note** — the trust hierarchy and recall guidance
-10. **Done** — compressed history (≤ 6, last, so a truncation hits it first)
-
-**Length model.** There is no separate word target. Each lossy section has a hard **item ceiling** (a cap on how many items it may hold — the numbers in the list above are the defaults, configurable via `compaction.ceilings`), and the prompt tells the model to keep items terse and the whole summary concise. The two lossless anchors (Latest User Message, Current Task) are uncapped. `compaction.maxTokens` is a separate API backstop that only bounds runaway generation — it is not a length target. Detail that doesn't fit a section is demoted to Recall Keys, where it stays retrievable with `vcc_recall`. Because the budget is per-section, there is no single global number to tune — raise a ceiling (or `maxTokens`) to let a section hold more.
-
-**Lossless anchors.** The Latest User Message and Current Task are never compressed — they anchor the current work and get as much space as they need. User-stated constraints that the current work depends on are preserved in Standing Notes and take priority there.
-
-**Latest *meaningful* user message.** A bare continuation ("continue", "ok", "yes") carries no intent, so the extractor skips it and uses the most recent substantive user message (looking back up to 5 user messages). If every recent message is a continuation, it falls back to the most recent one verbatim.
-
-**Cross-cutting rules.**
-- **Re-compress, don't append** — on later compactions the model merges new work into existing themes, updates existing bullets to their current state, prunes obsolete items, and keeps every section within its ceiling (the total stays about the same length, not longer).
-- **Overflow → Recall Keys** — anything that exceeds a ceiling or is dropped becomes a verbatim Recall Key (an index, not an archive; anything not indexed is still recoverable with a free-form `vcc_recall` search).
-- **Contradictions resolve to the latest** — if two statements conflict, the most recent wins and the superseded one is demoted to Recall Keys if worth keeping.
-
-**Done** is the section most prone to bloat, so each bullet is a **complete, verifiable claim** (what was done plus a checkable outcome), written as **conclusions, not steps**, with a **hard boundary**: a bullet is "done" only if it is finished *and* you can state how you know — anything not finished-and-verified belongs in **In Progress** (bias to In Progress when in doubt). This stops the model from spiraling back into re-investigating work it wrongly marked done.
+The full section list, the re-compress / overflow / contradiction rules, and the "Done = verifiable claim" rule live in the summary prompt ([src/prompts.ts](src/prompts.ts)).
 
 ### Auto-rename
 
-```
-First agent_settled, then every autoname.refreshTurns settled turns
-    ↓
-Select user messages: first + up to 3 sampled middle + last 3 (each capped at 500 chars)
-    ↓
-LLM call (main topic: latest context, max 14 words, 10s timeout)
-    ↓
-NO_CHANGE → keep current title
-otherwise   → pi.setSessionName(title)
-```
+After the first settled turn — and every `autoname.refreshTurns` turns after — it calls the model with a slice of user messages (first + up to 3 sampled from the middle + last 3, each capped at 500 chars) to produce a `main topic: latest context` title, set via `pi.setSessionName`. The model may answer `NO_CHANGE` to keep the current title, which is read from the session (authoritative across restarts).
 
-Both parts update as the conversation moves: the main topic is derived from the whole provided conversation (so a mid-conversation topic shift replaces the original anchor), and the latest context tracks the most recent work. On refresh runs the model sees the current title and can respond `NO_CHANGE` to leave it alone.
-
-### `/autoname` — per-session toggle
-
-Auto-rename is on by default. Turn it off for the current session and back on again with the `/autoname` command:
-
-- `/autoname` — toggle (no argument flips the current state)
-- `/autoname off` — disable for this session
-- `/autoname on` — re-enable (forces one immediate rename so the title doesn't sit stale until the next refresh boundary)
-- `/autoname status` — show the current state
-
-The state is stored as a per-session custom entry, so it survives restarts and `pi --resume`, is never sent to the LLM, and is still readable after compaction. While disabled, a footer status reads `autoname: off` (cleared when re-enabled). Each session has its own state, so toggling here doesn't affect other sessions.
-
-### `/rename` — run the auto-rename now
-
-`/rename` runs the LLM naming pass on demand, without waiting for the next `autoname.refreshTurns` boundary. It works even when `/autoname` is off, since it is an explicit user action. It reuses the exact same naming logic as the background handler (same prompt, same message selection, same `NO_CHANGE` handling) and reports the outcome:
-
-- renamed → `Session renamed to: <title>`
-- `NO_CHANGE` (the current title still fits) → `Auto-rename: no change`
-- no user messages yet → `Auto-rename: nothing to rename yet`
-- LLM failure → `Auto-rename: no title produced`
-
-The current title is read from the session (authoritative, survives restarts), so the model can keep a good name instead of overwriting it.
-
-### `/open` — session launcher
-
-One entry point for all session operations. Running `/open` picks an action, then asks **delete the old session?** and does the action:
-
-- **New session here** — start a new chat in the current directory (same as `/new`).
-- **New session in…** — start a new chat in a directory you type (live directory autocomplete in the TUI). The session file is created in the target's session dir and the runtime switches to it via `ctx.switchSession` with `cwdOverride`.
-- **Open session** — switch to an existing session, listed grouped by working directory (current directory first, newest first). Sessions can be deleted inline from the list (`d`, then y/n) without leaving it.
-
-The delete prompt appears before the operation so you know what's coming, but the actual file removal happens in the post-switch `withSession` callback — after the new session is live. Switching (Open session) resumes the chosen file in its own directory via `ctx.switchSession`.
-
-**Esc cancels the whole flow.** Esc at any step — action picker, path input, session list, or the delete prompt — aborts and stays in the current session; it is never interpreted as "No, keep it". The delete prompt has an explicit "No, keep it" option for that. The one exception is the inline `d` → y/n delete confirm inside the session list, where Esc cancels the delete and returns to the list.
-
-**Unsaved sessions are skipped.** Pi only creates a session file once the session has a user or assistant message, so a fresh session has nothing on disk to delete. The launcher detects that (no file for the current session) and skips the delete prompt entirely.
-
-In the TUI the launcher is a custom component: the action picker and the session list are native pickers (↑/↓ move, Enter select, Esc cancel), and the "new session in…" step is a real path input with live directory autocomplete (Tab completes, ↑/↓ select, Enter opens). In RPC mode it falls back to the built-in select + input.
-
-A session file holds the whole tree, so removing it drops every branch in it, not just the active one.
+- **`/rename`** runs the same pass on demand and reports the outcome (renamed / no change / nothing yet / no title produced). It works even when auto-rename is off.
+- **`/autoname`** toggles the feature per session (`on` / `off` / `status`; no argument flips). State is stored as a per-session custom entry, so it survives restarts and `pi --resume`, is never sent to the LLM, and is still readable after compaction. While off, the footer shows `autoname: off`.
 
 ### pi-vcc integration
 
-pi-vcc is a standard pi extension, so this plugin calls its default export with the same `ExtensionAPI`. Everything pi-vcc registers becomes available through this one extension:
+pi-vcc is vendored as a submodule and registered by calling its default export with the same `ExtensionAPI`, so `vcc_recall`, `/pi-vcc`, `/pi-vcc-recall`, and pi-vcc's own `session_before_compact` hook all work without a separate install.
 
-- `vcc_recall` — model tool for recalling pre-compaction content
-- `/pi-vcc` — manual compaction with pi-vcc's algorithmic summary
-- `/pi-vcc-recall` — manual recall command
-- pi-vcc's own `session_before_compact` hook
+The two before-compact hooks coexist because pi's runner keeps the **last non-null** result. This plugin registers its handler *before* pi-vcc, so:
 
-The two before-compact hooks coexist because pi's runner keeps the **last non-null** result. This plugin registers its compaction handler *before* calling pi-vcc, so:
+- pi-vcc wins when it claims a compaction (explicit `/pi-vcc`, or `overrideDefaultCompaction: true` in its config);
+- the hybrid summary applies otherwise;
+- the hybrid handler mirrors pi-vcc's claim gate, so it never wastes an LLM call pi-vcc would discard.
 
-- pi-vcc wins when it claims a compaction (explicit `/pi-vcc`, or `overrideDefaultCompaction: true` in its config)
-- the hybrid LLM summary applies otherwise
-- the hybrid handler mirrors pi-vcc's claim gate (marker or `overrideDefaultCompaction`), so it never makes an LLM call that pi-vcc would discard
+This plugin's `postinstall` sets `overrideDefaultCompaction: false` in the vendored copy, so automatic compactions use the hybrid summary while `/pi-vcc` still does manual algorithmic compaction. pi-vcc's own settings live in `~/.pi/agent/pi-vcc-config.json` (override with `PI_VCC_CONFIG_PATH`). Don't also install pi-vcc as a separate pi package — the `vcc_recall` tool would register twice.
 
-**Config:** pi-vcc writes its settings to `~/.pi/agent/pi-vcc-config.json` (overridable via `PI_VCC_CONFIG_PATH`). Note that `overrideDefaultCompaction` defaults to `true` on fresh installs, meaning pi-vcc handles *all* compactions and the hybrid LLM path never runs. Set it to `false` if you want the hybrid summary for automatic compactions while keeping `/pi-vcc` for manual algorithmic compaction.
+### `/open` — session launcher
 
-**Do not also install pi-vcc as a separate pi package** — the `vcc_recall` tool and commands would be registered twice.
+`/open` is one entry point for session operations. It picks an action, asks **delete the old session?** (so you know what's coming), then acts:
+
+- **New session here** — new chat in the current directory (like pi's `/new`).
+- **New session in…** — new chat in a directory you type (live directory autocomplete in the TUI). The session file is created there and the runtime switches via `ctx.switchSession` with `cwdOverride`.
+- **Open a session** — switch to an existing session, listed grouped by working directory (current directory first, newest first). Each row shows its id + date (toggle with `i`); empty sessions are dimmed. Press `d` to delete a listed session inline (y/n confirm).
+
+The actual file removal happens in the post-switch `withSession` callback, after the new session is live. **Esc cancels the whole flow** at any step (action picker, path input, list, or delete prompt) — it's never "No, keep it"; the delete prompt has an explicit "No, keep it" for that.
+
+**Empty sessions.** A session is "empty" when it has no user/assistant messages. Pi only writes a file once such a message exists, but the "new in directory" flow writes a header-only file up front (so the switch can derive the cwd). Empty sessions skip the delete prompt, and a `session_shutdown` cleanup removes any header-only file so throwaway sessions leave no trace on disk.
+
+**Arguments:** `/open` (picker) · `/open new` or `/open here` (new here) · `/open open` (open existing) · `/open new <path>` (new in `<path>`).
 
 ## Configuration
 
@@ -212,9 +124,11 @@ This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable vi
 ```bash
 git clone <repo>
 cd pi-context-plugin
-git submodule update --init --recursive   # vendor/pi-vcc (pi-vcc integration)
+npm install        # postinstall: checks out vendor/pi-vcc + sets overrideDefaultCompaction=false
 pi --extension ./src/index.ts
 ```
+
+`npm install` runs the `postinstall` script, which checks out the `vendor/pi-vcc` submodule **and** flips `overrideDefaultCompaction` to `false` in the vendored source (so the hybrid summary handles automatic compactions rather than pi-vcc). If you check out the submodule manually with `git submodule update --init --recursive` instead, you must make that same edit — pi-vcc's upstream default is `true`, so it would otherwise claim every compaction.
 
 ## File layout
 
