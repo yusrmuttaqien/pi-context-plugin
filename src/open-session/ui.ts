@@ -163,7 +163,7 @@ export class GroupedList implements Component {
         lines.push(prefix + label + desc);
       }
     }
-    lines.push(this.styles.scroll(`(${this.selected + 1}/${total})`));
+    lines.push(this.styles.scroll(`(${this.selected + 1}/${total})${this.onDelete ? "  ·  d: delete" : ""}`));
     if (this.confirming) {
       lines.push("");
       lines.push(this.styles.selected(`Delete \u201c${this.deleteLabel}\u201d?  y/n`));
