@@ -131,7 +131,6 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
           return;
         }
         if (keybindings.matches(data, "tui.select.confirm")) {
-          complete();
           const p = input.getValue().trim();
           if (!p) { done(null); return; }
           done(resolve(p));
