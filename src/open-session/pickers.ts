@@ -180,8 +180,8 @@ export async function pickDeleteFirst(ctx: ExtensionContext, file: string): Prom
     return await ctx.ui.custom<boolean | null>((_tui, theme, _kb, done) => {
       const list = new SelectList(
         [
-          { value: "yes", label: "Yes, delete it" },
           { value: "no", label: "No, keep it" },
+          { value: "yes", label: "Yes, delete it" },
         ],
         10,
         selectTheme(theme),
