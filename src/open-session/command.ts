@@ -10,11 +10,32 @@ import { pickAction, pickPath, pickSession, pickDeleteFirst, type TopAction } fr
 // ReplacedSessionContext, not re-exported from the package entry).
 type Nctx = { ui: { notify(message: string, type?: "info" | "warning" | "error"): void } };
 
-// Start a new session in a directory, optionally deleting the current one first.
-// newSession() uses the runtime's current cwd, so to land in a different dir we
-// create the session file in the target's session dir, then switchSession() to it
-// with cwdOverride (the only API that accepts a cwd override).
-async function newSessionInDir(ctx: ExtensionCommandContext, target: string, del: boolean | null): Promise<void> {
+// Ask whether to delete the old session (shown before the operation so the user
+// knows what will happen). Returns true if the user wants it deleted.
+async function askDeleteOld(ctx: ExtensionCommandContext, oldFile: string | null): Promise<boolean> {
+  if (!oldFile) return false;
+  const del = await pickDeleteFirst(ctx, oldFile);
+  return del === true;
+}
+
+// Delete the old session file (called in the withSession callback, after the
+// switch succeeds). If the switch is cancelled, this never runs.
+async function deleteOld(oldFile: string, nctx: Nctx): Promise<void> {
+  try {
+    await fs.unlink(oldFile);
+    nctx.ui.notify("Deleted old session.", "info");
+  } catch (e) {
+    nctx.ui.notify(`Delete failed: ${(e as Error).message}`, "error");
+  }
+}
+
+// Start a new session in a directory.
+async function newSessionInDir(
+  ctx: ExtensionCommandContext,
+  target: string,
+  oldFile: string | null,
+  del: boolean,
+): Promise<void> {
   const sm = SessionManager.create(target);
   const sessionFile = sm.newSession();
   if (!sessionFile) {
@@ -26,7 +47,8 @@ async function newSessionInDir(ctx: ExtensionCommandContext, target: string, del
   }).switchSession(sessionFile, {
     cwdOverride: target,
     withSession: async (nctx) => {
-      if (del) nctx.ui.notify(`New session in ${target}.`, "info");
+      if (del && oldFile) await deleteOld(oldFile, nctx);
+      nctx.ui.notify(`New session in ${target}.`, "info");
     },
   });
 }
@@ -37,27 +59,12 @@ async function applyAction(
   cur: { file: string | null; cwd: string },
   prePickedPath?: string,
 ): Promise<void> {
-  const doDelete = async (): Promise<boolean | null> => {
-    if (!cur.file) return false;
-    const del = await pickDeleteFirst(ctx, cur.file);
-    if (del === null) return null;
-    if (!del) return false;
-    try {
-      await fs.unlink(cur.file);
-      ctx.ui.notify("Deleted current session.", "info");
-      return true;
-    } catch (e) {
-      ctx.ui.notify(`Delete failed: ${(e as Error).message}`, "error");
-      return false;
-    }
-  };
-
   if (action === "new-here") {
-    const del = await doDelete();
-    if (del === null) return;
+    const del = await askDeleteOld(ctx, cur.file);
     await ctx.newSession({
       withSession: async (nctx) => {
-        if (del) nctx.ui.notify("New session started here.", "info");
+        if (del && cur.file) await deleteOld(cur.file, nctx);
+        nctx.ui.notify("New session started here.", "info");
       },
     });
     return;
@@ -75,17 +82,15 @@ async function applyAction(
       ctx.ui.notify(`Not a directory: ${target}`, "warning");
       return;
     }
-    const del = await doDelete();
-    if (del === null) return;
-    await newSessionInDir(ctx, target, del);
+    const del = await askDeleteOld(ctx, cur.file);
+    await newSessionInDir(ctx, target, cur.file, del);
     return;
   }
 
   // open
-  const del = await doDelete();
-  if (del === null) return;
   const picked = await pickSession(ctx, cur.file);
   if (!picked) return;
+  const del = await askDeleteOld(ctx, cur.file);
   const targetCwd = path.dirname(picked);
   const meta = await readJsonl(picked);
   const switchTarget = meta.cwd ? path.resolve(meta.cwd) : targetCwd;
@@ -94,7 +99,8 @@ async function applyAction(
   }).switchSession(picked, {
     cwdOverride: switchTarget,
     withSession: async (nctx) => {
-      if (del) nctx.ui.notify("Switched sessions.", "info");
+      if (del && cur.file) await deleteOld(cur.file, nctx);
+      nctx.ui.notify("Switched sessions.", "info");
     },
   });
 }
