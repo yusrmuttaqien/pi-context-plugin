@@ -252,5 +252,7 @@ export async function pickDeleteFirst(ctx: ExtensionContext, file: string): Prom
       return new Panel(new WithHeader(header, list), (t) => theme.fg("accent", t));
     }, { overlay: true, overlayOptions: { anchor: "center", width: 50, margin: 2 } });
   }
-  return ctx.ui.confirm(`Delete this session? ${file}`, "Yes, delete");
+  const sel = await ctx.ui.select(`Delete this session? ${file}`, ["No, keep it", "Yes, delete"]);
+  if (sel === undefined) return null;
+  return sel === "Yes, delete";
 }

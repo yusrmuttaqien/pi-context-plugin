@@ -10,11 +10,11 @@ import { pickAction, pickPath, pickSession, pickDeleteFirst, type TopAction } fr
 type Nctx = { ui: { notify(message: string, type?: "info" | "warning" | "error"): void } };
 
 // Ask whether to delete the old session (shown before the operation so the user
-// knows what will happen). Returns true if the user wants it deleted.
-async function askDeleteOld(ctx: ExtensionCommandContext, oldFile: string | null): Promise<boolean> {
+// knows what will happen). Returns true to delete, false to keep, or null if
+// the user cancelled (Esc) — the caller should abort the whole flow.
+async function askDeleteOld(ctx: ExtensionCommandContext, oldFile: string | null): Promise<boolean | null> {
   if (!oldFile) return false;
-  const del = await pickDeleteFirst(ctx, oldFile);
-  return del === true;
+  return pickDeleteFirst(ctx, oldFile);
 }
 
 // Delete the old session file (called in the withSession callback, after the
@@ -26,6 +26,13 @@ async function deleteOld(oldFile: string, nctx: Nctx): Promise<void> {
   } catch (e) {
     nctx.ui.notify(`Delete failed: ${(e as Error).message}`, "error");
   }
+}
+
+// A fresh session has no file on disk yet (pi only creates it on the first
+// user/assistant message), so there is nothing to delete.
+async function currentIsEmpty(file: string | null): Promise<boolean> {
+  if (!file) return true;
+  return await fs.stat(file).then(() => false).catch(() => true);
 }
 
 // Start a new session in a directory.
@@ -66,11 +73,15 @@ async function applyAction(
   cur: { file: string | null; cwd: string },
   prePickedPath?: string,
 ): Promise<void> {
+  // Skip the delete prompt when the current session has not been saved yet.
+  const oldFile = (await currentIsEmpty(cur.file)) ? null : cur.file;
+
   if (action === "new-here") {
-    const del = await askDeleteOld(ctx, cur.file);
+    const del = await askDeleteOld(ctx, oldFile);
+    if (del === null) return;
     await ctx.newSession({
       withSession: async (nctx) => {
-        if (del && cur.file) await deleteOld(cur.file, nctx);
+        if (del && oldFile) await deleteOld(oldFile, nctx);
         nctx.ui.notify("New session started here.", "info");
       },
     });
@@ -89,15 +100,17 @@ async function applyAction(
       ctx.ui.notify(`Not a directory: ${target}`, "warning");
       return;
     }
-    const del = await askDeleteOld(ctx, cur.file);
-    await newSessionInDir(ctx, target, cur.file, del);
+    const del = await askDeleteOld(ctx, oldFile);
+    if (del === null) return;
+    await newSessionInDir(ctx, target, oldFile, del);
     return;
   }
 
   // open
   const picked = await pickSession(ctx, cur.file);
   if (!picked) return;
-  const del = await askDeleteOld(ctx, cur.file);
+  const del = await askDeleteOld(ctx, oldFile);
+  if (del === null) return;
   const targetCwd = path.dirname(picked);
   const meta = await readJsonl(picked);
   const switchTarget = meta.cwd ? path.resolve(meta.cwd) : targetCwd;
@@ -106,7 +119,7 @@ async function applyAction(
   }).switchSession(picked, {
     cwdOverride: switchTarget,
     withSession: async (nctx) => {
-      if (del && cur.file) await deleteOld(cur.file, nctx);
+      if (del && oldFile) await deleteOld(oldFile, nctx);
       nctx.ui.notify("Switched sessions.", "info");
     },
   });
