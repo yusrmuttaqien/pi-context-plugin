@@ -99,7 +99,9 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
       };
       const complete = () => {
         if (selectedSuggestion >= 0 && suggestions[selectedSuggestion]) {
-          input.setValue(suggestions[selectedSuggestion]);
+          const val = suggestions[selectedSuggestion];
+          input.setValue(val);
+          (input as unknown as { cursor: number }).cursor = val.length;
           refresh();
         }
       };
