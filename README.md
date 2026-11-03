@@ -127,13 +127,13 @@ The current title is read from the session (authoritative, survives restarts), s
 
 ### `/open` — session launcher
 
-One entry point for all session operations. Running `/open` picks an action, then asks one shared question — **delete the current session?** — and does the action:
+One entry point for all session operations. Running `/open` picks an action, then asks **delete the old session?** and does the action:
 
 - **New session here** — start a new chat in the current directory (same as `/new`).
-- **New session in…** — start a new chat in a directory you type (live directory autocomplete in the TUI).
+- **New session in…** — start a new chat in a directory you type (live directory autocomplete in the TUI). The session file is created in the target's session dir and the runtime switches to it via `ctx.switchSession` with `cwdOverride`.
 - **Open session** — switch to an existing session, listed grouped by working directory (current directory first, newest first).
 
-Each action applies your delete-current answer: yes removes the current session file as it starts, no keeps it. Switching (Open session) resumes the chosen file in its own directory via `ctx.switchSession`.
+The delete prompt appears before the operation so you know what's coming, but the actual file removal happens in the post-switch `withSession` callback — after the new session is live. If the operation is cancelled (Esc on a picker), the old session survives. Switching (Open session) resumes the chosen file in its own directory via `ctx.switchSession`.
 
 - `/open delete` — fast path: delete the current session file and open a new chat in the current directory (no action picker).
 - `/open delete -y` / `--yes` — skip the confirm prompt.
@@ -141,7 +141,7 @@ Each action applies your delete-current answer: yes removes the current session 
 
 In the TUI the launcher is a custom component: the action picker and the session list are native pickers (↑/↓ move, Enter select, Esc cancel), and the "new session in…" step is a real path input with live directory autocomplete (Tab completes, ↑/↓ select, Enter opens). In RPC mode it falls back to the built-in select + input.
 
-Deleting the current session captures the current session file, moves the live session manager onto a fresh file (`ctx.newSession` for new-here, `ctx.switchSession` for the others), and only then removes the old one — inside the post-switch `withSession` callback on the fresh context, so it never races the session manager still writing. A session file holds the whole tree, so removing it drops every branch in it, not just the active one.
+A session file holds the whole tree, so removing it drops every branch in it, not just the active one.
 
 ### pi-vcc integration
 
@@ -225,7 +225,7 @@ pi-context-plugin/
 │   ├── compaction.ts     # hybrid compaction handler
 │   ├── auto-rename.ts    # session auto-rename handler + /rename command
 │   ├── autoname-toggle.ts  # /autoname command + per-session on/off state
-│   ├── open-session.ts   # /open: session launcher (new here / new in dir / open existing / delete+new)
+│   ├── open-session/     # /open: session launcher (new here / new in dir / open existing / delete+new)
 │   ├── pi-vcc.ts         # pi-vcc integration: full extension + compile() fallback
 │   ├── prompts.ts        # prompt builders (summary + rename)
 │   └── settings.ts       # extension settings (mirrors pi-vcc's settings structure)
