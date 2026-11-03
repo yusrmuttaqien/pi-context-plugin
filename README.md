@@ -131,13 +131,13 @@ One entry point for all session operations. Running `/open` picks an action, the
 
 - **New session here** — start a new chat in the current directory (same as `/new`).
 - **New session in…** — start a new chat in a directory you type (live directory autocomplete in the TUI). The session file is created in the target's session dir and the runtime switches to it via `ctx.switchSession` with `cwdOverride`.
-- **Open session** — switch to an existing session, listed grouped by working directory (current directory first, newest first).
+- **Open session** — switch to an existing session, listed grouped by working directory (current directory first, newest first). Sessions can be deleted inline from the list (`d`, then y/n) without leaving it.
 
-The delete prompt appears before the operation so you know what's coming, but the actual file removal happens in the post-switch `withSession` callback — after the new session is live. If the operation is cancelled (Esc on a picker), the old session survives. Switching (Open session) resumes the chosen file in its own directory via `ctx.switchSession`.
+The delete prompt appears before the operation so you know what's coming, but the actual file removal happens in the post-switch `withSession` callback — after the new session is live. Switching (Open session) resumes the chosen file in its own directory via `ctx.switchSession`.
 
-- `/open delete` — fast path: delete the current session file and open a new chat in the current directory (no action picker).
-- `/open delete -y` / `--yes` — skip the confirm prompt.
-- `/open delete -t` / `--trash` — move the old file to `~/.pi/agent/sessions/.trash/` instead of deleting it.
+**Esc cancels the whole flow.** Esc at any step — action picker, path input, session list, or the delete prompt — aborts and stays in the current session; it is never interpreted as "No, keep it". The delete prompt has an explicit "No, keep it" option for that. The one exception is the inline `d` → y/n delete confirm inside the session list, where Esc cancels the delete and returns to the list.
+
+**Unsaved sessions are skipped.** Pi only creates a session file once the session has a user or assistant message, so a fresh session has nothing on disk to delete. The launcher detects that (no file for the current session) and skips the delete prompt entirely.
 
 In the TUI the launcher is a custom component: the action picker and the session list are native pickers (↑/↓ move, Enter select, Esc cancel), and the "new session in…" step is a real path input with live directory autocomplete (Tab completes, ↑/↓ select, Enter opens). In RPC mode it falls back to the built-in select + input.
 
