@@ -2,6 +2,25 @@
 
 Hybrid compaction, auto-rename, a session launcher, and built-in pi-vcc for [pi](https://github.com/badlogic/pi-mono).
 
+## Usage
+
+Install from git:
+
+```bash
+pi install git:github.com/yusrmuttaqien/pi-context-plugin
+```
+
+Or clone and run directly:
+
+```bash
+git clone <repo>
+cd pi-context-plugin
+npm install        # postinstall: checks out vendor/pi-vcc + flips overrideDefaultCompaction
+pi --extension ./src/index.ts
+```
+
+Both run the `postinstall` script, which checks out the `vendor/pi-vcc` submodule **and** flips `overrideDefaultCompaction` to `false` in the vendored source (so the hybrid summary handles automatic compactions rather than pi-vcc). The pi-vcc integration needs that submodule, so if you skip the install step and check out the submodule manually with `git submodule update --init --recursive`, make that same edit yourself — pi-vcc's upstream default is `true`, so it would otherwise claim every compaction.
+
 ## What it does
 
 Four features:
@@ -119,17 +138,6 @@ This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable vi
 | `ceilings.done` | `6` | Done (thematic bullets) |
 | `ceilings.recallKeys` | `10` | Recall Keys (groups) |
 
-## Usage
-
-```bash
-git clone <repo>
-cd pi-context-plugin
-npm install        # postinstall: checks out vendor/pi-vcc + sets overrideDefaultCompaction=false
-pi --extension ./src/index.ts
-```
-
-`npm install` runs the `postinstall` script, which checks out the `vendor/pi-vcc` submodule **and** flips `overrideDefaultCompaction` to `false` in the vendored source (so the hybrid summary handles automatic compactions rather than pi-vcc). If you check out the submodule manually with `git submodule update --init --recursive` instead, you must make that same edit — pi-vcc's upstream default is `true`, so it would otherwise claim every compaction.
-
 ## File layout
 
 ```
@@ -140,6 +148,11 @@ pi-context-plugin/
 │   ├── auto-rename.ts    # session auto-rename handler + /rename command
 │   ├── autoname-toggle.ts  # /autoname command + per-session on/off state
 │   ├── open-session/     # /open: session launcher (new here / new in dir / open existing / delete+new)
+│   │   ├── index.ts      #   re-exports the command + empty-session cleanup
+│   │   ├── command.ts    #   /open command + empty-session session_shutdown cleanup
+│   │   ├── pickers.ts    #   action / path / session / delete pickers
+│   │   ├── scan.ts       #   session scanning, grouping, date formatting
+│   │   └── ui.ts         #   GroupedList, Panel, WithHeader
 │   ├── pi-vcc.ts         # pi-vcc integration: full extension + compile() fallback
 │   ├── prompts.ts        # prompt builders (summary + rename)
 │   └── settings.ts       # extension settings (mirrors pi-vcc's settings structure)
