@@ -74,7 +74,7 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
           .readdir(base, { withFileTypes: true })
           .then((entries) => {
             const dirs = entries
-              .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+              .filter((e) => e.isDirectory() && (filter.startsWith(".") || !e.name.startsWith(".")))
               .map((e) => e.name)
               .filter((n) => n.startsWith(filter))
               .sort()
