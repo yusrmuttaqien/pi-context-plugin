@@ -79,12 +79,13 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
               .slice(0, 8);
             suggestions = dirs.map((n) => base + n);
             selectedSuggestion = suggestions.length > 0 ? 0 : -1;
+            tui.requestRender();
           })
           .catch(() => {
             suggestions = [];
             selectedSuggestion = -1;
+            tui.requestRender();
           });
-        tui.requestRender();
       };
       const complete = () => {
         if (selectedSuggestion >= 0 && suggestions[selectedSuggestion]) {
