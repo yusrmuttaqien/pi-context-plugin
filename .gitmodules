@@ -1,3 +1,4 @@
 [submodule "vendor/pi-vcc"]
 	path = vendor/pi-vcc
 	url = https://github.com/sting8k/pi-vcc.git
+	ignore = dirty
