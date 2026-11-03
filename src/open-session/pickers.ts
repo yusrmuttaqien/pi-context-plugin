@@ -49,6 +49,7 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
       // Start empty; cursor is at the end (position 0).
       let suggestions: string[] = [];
       let selectedSuggestion = -1;
+      let currentBase = cwd;
       const refresh = () => {
         const raw = input.getValue().trim();
         // Resolve to absolute path.
@@ -67,6 +68,7 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
         // Split on last "/".
         const lastSlash = abs.lastIndexOf("/");
         const base = abs.slice(0, lastSlash + 1) || "/";
+        currentBase = base;
         const filter = abs.slice(lastSlash + 1);
         fs
           .readdir(base, { withFileTypes: true })
@@ -77,7 +79,7 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
               .filter((n) => n.startsWith(filter))
               .sort()
               .slice(0, 8);
-            suggestions = dirs.map((n) => base + n);
+            suggestions = dirs;
             selectedSuggestion = suggestions.length > 0 ? 0 : -1;
             tui.requestRender();
           })
@@ -89,7 +91,7 @@ export async function pickPath(ctx: ExtensionContext, cwd: string): Promise<stri
       };
       const complete = () => {
         if (selectedSuggestion >= 0 && suggestions[selectedSuggestion]) {
-          const val = suggestions[selectedSuggestion] + "/";
+          const val = currentBase + suggestions[selectedSuggestion] + "/";
           input.setValue(val);
           (input as unknown as { cursor: number }).cursor = val.length;
           input.invalidate();
