@@ -1,1 +1,1 @@
-export { registerOpenSession, registerEmptySessionCleanup } from "./command.js";
+export { registerOpenSession, registerCloseSession, registerEmptySessionCleanup } from "./command.js";

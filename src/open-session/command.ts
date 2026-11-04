@@ -150,7 +150,7 @@ async function applyAction(
 }
 
 export function registerOpenSession(pi: ExtensionAPI): void {
-  pi.registerCommand("open", {
+  pi.registerCommand("open-session", {
     description: "Manage sessions: new here, new in a directory, or open an existing one (deletes current first)",
     handler: async (args, c) => {
       const arg = (args ?? "").trim();
@@ -176,6 +176,27 @@ export function registerOpenSession(pi: ExtensionAPI): void {
       if (!action) return;
       const curFile = currentFile(c);
       await applyAction(c, action, { file: curFile, cwd: c.cwd });
+    },
+  });
+}
+
+// Close pi, deleting the current session first if it has a conversation.
+// Reuses the /open-session delete logic: an empty session has nothing to
+// delete, so the prompt is skipped; a session with a conversation asks. Esc
+// cancels without closing.
+export function registerCloseSession(pi: ExtensionAPI): void {
+  pi.registerCommand("close-session", {
+    description: "Close pi, deleting the current session first if it has a conversation",
+    handler: async (_args, ctx) => {
+      const curFile = currentFile(ctx);
+      const oldFile = (await currentIsEmpty(curFile)) ? null : curFile;
+      const del = await askDeleteOld(ctx, oldFile);
+      if (del === null) return; // Esc -> abort, don't close
+      if (del && oldFile) {
+        await fs.unlink(oldFile).catch(() => {});
+        ctx.ui.notify("Deleted session.", "info");
+      }
+      ctx.shutdown();
     },
   });
 }

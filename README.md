@@ -37,14 +37,14 @@ Four features:
 
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
 
-4. **Session launcher** — `/open` starts a new session (here or in a directory you type), opens an existing session, or deletes the current session and starts fresh.
+4. **Session launcher** — `/open-session` starts a new session (here or in a directory you type), opens an existing session, or deletes the current session and starts fresh. `/close-session` closes pi, deleting the current session first if it has a conversation.
 
 ## Why
 
 Pi's session handling has three gaps this plugin fills:
 
 - **Compaction drifts.** Pi's default compaction summarizes only the turn prefix, so in long multi-topic conversations it anchors on the first request and the model confabulates follow-ups that were never asked. The hybrid summary covers the whole conversation, keeps the latest meaningful user message and current task lossless, and adds a trust hierarchy so the model recalls rather than reconstructs.
-- **Sessions are nameless and unmanageable.** Pi gives sessions auto-generated filenames and has no single command to start one in a chosen directory or delete the current one. Auto-rename gives every session a `main topic: latest context` title; `/open` is a unified launcher for new / switch / delete.
+- **Sessions are nameless and unmanageable.** Pi gives sessions auto-generated filenames and has no single command to start one in a chosen directory or delete the current one. Auto-rename gives every session a `main topic: latest context` title; `/open-session` is a unified launcher for new / switch / delete, and `/close-session` closes pi (optionally deleting the session first).
 - **Recall needs a second install.** pi-vcc's `vcc_recall` tool is what makes compressed content recoverable, but installing pi-vcc separately would double-register the tool. This plugin vendors pi-vcc and registers it directly.
 
 ## How it works
@@ -81,9 +81,9 @@ The two before-compact hooks coexist because pi's runner keeps the **last non-nu
 
 This plugin's `postinstall` sets `overrideDefaultCompaction: false` in the vendored copy, so automatic compactions use the hybrid summary while `/pi-vcc` still does manual algorithmic compaction. pi-vcc's own settings live in `~/.pi/agent/pi-vcc-config.json` (override with `PI_VCC_CONFIG_PATH`). Don't also install pi-vcc as a separate pi package — the `vcc_recall` tool would register twice.
 
-### `/open` — session launcher
+### `/open-session` — session launcher
 
-`/open` is one entry point for session operations. It picks an action, asks **delete the old session?** (so you know what's coming), then acts:
+`/open-session` is one entry point for session operations. It picks an action, asks **delete the old session?** (so you know what's coming), then acts:
 
 - **New session here** — new chat in the current directory (like pi's `/new`).
 - **New session in…** — new chat in a directory you type (live directory autocomplete in the TUI). The session file is created there and the runtime switches via `ctx.switchSession` with `cwdOverride`.
@@ -93,7 +93,11 @@ The actual file removal happens in the post-switch `withSession` callback, after
 
 **Empty sessions.** A session is "empty" when it has no user/assistant messages. Pi only writes a file once such a message exists, but the "new in directory" flow writes a header-only file up front (so the switch can derive the cwd). Empty sessions skip the delete prompt, and a `session_shutdown` cleanup removes any header-only file so throwaway sessions leave no trace on disk.
 
-**Arguments:** `/open` (picker) · `/open new` or `/open here` (new here) · `/open open` (open existing) · `/open new <path>` (new in `<path>`).
+**Arguments:** `/open-session` (picker) · `/open-session new` or `/open-session here` (new here) · `/open-session open` (open existing) · `/open-session new <path>` (new in `<path>`).
+
+### `/close-session` — close pi
+
+`/close-session` closes pi, deleting the current session first if it has a conversation. It reuses the `/open-session` delete logic: an empty session (no user/assistant messages) has nothing to delete, so the prompt is skipped; a session with a conversation shows the delete dialog first. Esc cancels without closing.
 
 ## Configuration
 
@@ -148,9 +152,9 @@ pi-context-plugin/
 │   ├── index.ts          # entry point, registers all features (order matters)
 │   ├── compaction.ts     # hybrid compaction handler
 │   ├── auto-rename.ts    # session auto-rename: live-context retitle + /auto-rename + /rename + per-session state
-│   ├── open-session/     # /open: session launcher (new here / new in dir / open existing / delete+new)
+│   ├── open-session/     # /open-session + /close-session: session launcher (new here / new in dir / open existing / delete+new / close)
 │   │   ├── index.ts      #   re-exports the command + empty-session cleanup
-│   │   ├── command.ts    #   /open command + empty-session session_shutdown cleanup
+│   │   ├── command.ts    #   /open-session + /close-session commands + empty-session session_shutdown cleanup
 │   │   ├── pickers.ts    #   action / path / session / delete pickers
 │   │   ├── scan.ts       #   session scanning, grouping, date formatting
 │   │   └── ui.ts         #   GroupedList, Panel, WithHeader

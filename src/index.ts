@@ -5,9 +5,11 @@
  * - Hybrid compaction (src/compaction.ts)
  * - Session auto-rename (src/auto-rename.ts): automatic retitle from the
  *   live context, a per-session /auto-rename toggle, and on-demand /rename
- * - /open (src/open-session.ts): session launcher — switch to an existing
- *   session, start a new one (here or in another directory), or delete the
- *   current session and start fresh
+ * - /open-session (src/open-session): session launcher — switch to an
+ *   existing session, start a new one (here or in another directory), or
+ *   delete the current session and start fresh
+ * - /close-session (src/open-session): close pi, deleting the current session
+ *   first if it has a conversation
  * - pi-vcc (vendored submodule): vcc_recall tool, /pi-vcc and
  *   /pi-vcc-recall commands, settings scaffolding, and its own
  *   session_before_compact hook
@@ -25,7 +27,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoRename } from "./auto-rename";
 import { registerCompaction } from "./compaction";
-import { registerOpenSession, registerEmptySessionCleanup } from "./open-session";
+import { registerOpenSession, registerCloseSession, registerEmptySessionCleanup } from "./open-session";
 import { piVccExtension } from "./pi-vcc";
 import { scaffoldSettings } from "./settings";
 
@@ -34,6 +36,7 @@ export default function (pi: ExtensionAPI) {
 	registerAutoRename(pi);
 	registerCompaction(pi);
 	registerOpenSession(pi);
+	registerCloseSession(pi);
 	registerEmptySessionCleanup(pi);
 	piVccExtension(pi);
 }
