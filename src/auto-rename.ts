@@ -8,9 +8,10 @@
  * (only `pi.setSessionName`, which is metadata, not a message).
  *
  * The per-session `/auto-rename` toggle and the on-demand `/rename` live here
- * too. `/rename` is a cold call over a re-sampled slice of the user messages
- * (it has no live context to reuse), and works even when `/auto-rename` is
- * off, since it is an explicit user action.
+ * too. Both flows reuse the model's live context as a prefix-cache hit; `/rename`
+ * reconstructs that context from the session (it has no settle event to ride
+ * on) and works even when `/auto-rename` is off, since it is an explicit user
+ * action.
  *
  * The title uses a two-section format — `main topic: latest context` — so a
  * single chat that progresses to new topics keeps a name that tracks where the
@@ -24,9 +25,10 @@ import type {
 	ExtensionContext,
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { loadSettings } from "./settings";
-import { buildRenamePrompt, buildTitleInstruction, RENAME_NO_CHANGE } from "./prompts";
+import { buildTitleInstruction, RENAME_NO_CHANGE } from "./prompts";
 
 // --- Per-session toggle state (custom entry) ---
 
@@ -79,65 +81,6 @@ function reflectStatus(ctx: ExtensionContext, enabled: boolean): void {
 
 // --- Naming ---
 
-/** Per-message cap for the naming call — titles only need a slice of each message. */
-const TITLE_MESSAGE_CAP = 500;
-
-/**
- * Select the user messages the cold naming call sees: the first, up to three
- * evenly sampled from the middle, and the last three. The main topic must
- * be derivable from the whole conversation, not just the first message —
- * topics can shift mid-conversation.
- */
-function selectMessagesForTitle(userMessages: string[]): string[] {
-	const n = userMessages.length;
-	if (n <= 5) return [...userMessages];
-
-	const first = userMessages[0];
-	const recent = userMessages.slice(-3);
-	const middle = userMessages.slice(1, n - 3);
-	const count = Math.min(3, middle.length);
-	const sampled: string[] = [];
-	for (let i = 0; i < count; i++) {
-		const idx = Math.min(
-			middle.length - 1,
-			Math.floor(((i + 0.5) * middle.length) / count),
-		);
-		if (!sampled.includes(middle[idx])) sampled.push(middle[idx]);
-	}
-	return [first, ...sampled, ...recent];
-}
-
-/** Extract the user messages from the transcript (for the cold /rename path). */
-function extractUserMessages(ctx: ExtensionContext): string[] {
-	const entries = ctx.sessionManager.buildContextEntries();
-	const userMessages: string[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "message" || entry.message.role !== "user") continue;
-		const raw = entry.message.content;
-		const text = (
-			typeof raw === "string"
-				? raw
-				: raw
-						.filter((block): block is { type: "text"; text: string } => block.type === "text")
-						.map((block) => block.text)
-						.join(" ")
-		).trim();
-		if (!text) continue;
-		userMessages.push(
-			text.length > TITLE_MESSAGE_CAP
-				? `${text.slice(0, 400)}\n...\n${text.slice(-100)}`
-				: text,
-		);
-	}
-	return userMessages;
-}
-
-function buildTitleSystemPrompt(prefix: string): string {
-	return prefix.trim()
-		? `${prefix.trim()}\n\nYou generate short session titles. Respond with only the title.`
-		: "You generate short session titles. Respond with only the title.";
-}
-
 /** Outcome of a naming attempt, reported by the `/rename` command. */
 type RenameOutcome =
 	| { status: "renamed"; name: string }
@@ -153,10 +96,10 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 	/**
 	 * Run one naming pass and set the session name.
 	 *
-	 * When `llmMessages` is provided (the automatic path), the live context is
-	 * sent as-is and only the trailing instruction is new input, so the call is
-	 * a prefix-cache hit. When it is not (the on-demand /rename path), a
-	 * re-sampled slice of the user messages is built and the call is cold.
+	 * Both flows reuse the model's live context as a prefix-cache hit: the whole
+	 * conversation is sent as-is and only the trailing title instruction is new
+	 * input. The automatic path gets `llmMessages` from the settle event; the
+	 * on-demand /rename path reconstructs the same context from the session.
 	 */
 	async function runRename(ctx: ExtensionContext, llmMessages?: Message[]): Promise<RenameOutcome> {
 		const model = ctx.model;
@@ -164,48 +107,33 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 
 		const { autoname } = loadSettings();
 		const title = ctx.sessionManager.getSessionName() ?? currentTitle ?? undefined;
-		const freePrefill = !!llmMessages && llmMessages.length > 0;
 
-		let systemPrompt: string | undefined;
-		let messages: Message[];
-		if (freePrefill) {
-			messages = [
-				...llmMessages!,
-				{ role: "user", content: buildTitleInstruction(title), timestamp: Date.now() },
-			];
-		} else {
-			const userMessages = extractUserMessages(ctx);
-			if (userMessages.length === 0) return { status: "nothing" };
-			systemPrompt = buildTitleSystemPrompt(autoname.systemPromptPrefix);
-			messages = [
-				{
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text: buildRenamePrompt({
-								messages: selectMessagesForTitle(userMessages),
-								currentTitle: title,
-							}),
-						},
-					],
-					timestamp: Date.now(),
-				},
-			];
-		}
+		const context =
+			llmMessages ?? convertToLlm(ctx.sessionManager.buildSessionProjection().messages);
+		// Nothing to title yet: no conversation (only the system message, if any).
+		if (!context.some((m) => m.role !== "system")) return { status: "nothing" };
+
+		const prefix = autoname.systemPromptPrefix.trim();
+		const instruction = prefix
+			? `${prefix}\n\n${buildTitleInstruction(title)}`
+			: buildTitleInstruction(title);
+
+		const messages: Message[] = [
+			...context,
+			{ role: "user", content: instruction, timestamp: Date.now() },
+		];
 
 		try {
-			const response = await ctx.modelRegistry.complete(
-				model,
-				{ systemPrompt, messages },
-				{
+			const response = await ctx.modelRegistry
+				.streamSimple(model, { messages }, {
 					maxTokens: 100,
 					timeoutMs: 10_000,
-					// Cold path: don't retain the cache. Free-prefill path: leave the
-					// default so the main conversation's warm KV cache is reused.
-					...(freePrefill ? {} : { cacheRetention: "none" as const }),
-				},
-			);
+					// Reuse the main conversation's warm prefix cache: the context is
+					// byte-identical to the last turn's request, so only the trailing
+					// instruction is new input.
+					sessionId: ctx.sessionManager.getSessionId(),
+				})
+				.result();
 
 			const name = response.content
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")

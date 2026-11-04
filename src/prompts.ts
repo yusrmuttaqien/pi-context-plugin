@@ -128,41 +128,6 @@ ${conversationText}
 
 export const RENAME_NO_CHANGE = "NO_CHANGE";
 
-export interface RenamePromptOptions {
-	/** Selected user messages in chronological order (first, sampled middle, recent). */
-	messages: string[];
-	/** Current session title; present on refresh runs. */
-	currentTitle?: string;
-}
-
-/**
- * Build the session-title prompt for the on-demand /rename path, which is a
- * cold call over a re-sampled slice of the user messages (no live context to
- * reuse). The main topic must be derivable from the whole conversation, not
- * just the first message — topics can shift mid-conversation.
- */
-export function buildRenamePrompt(options: RenamePromptOptions): string {
-	const { messages, currentTitle } = options;
-
-	const current = currentTitle
-		? `\nCurrent title: "${currentTitle}"\nIf the current title still fits the conversation, respond ${RENAME_NO_CHANGE}.\n`
-		: "";
-
-	return `Generate a short title for this conversation.${current}
-
-The title has two parts separated by ": ":
-- Main topic: the overall topic the conversation is currently about. Derive it from the whole conversation below — if the topic has shifted mid-conversation, use the new topic, not the original one.
-- Latest context: what is being worked on right now, from the most recent messages.
-
-Example of a good title: "Auth module refactor: fixing the token refresh bug"
-If the conversation is a single simple topic, use just a short title with no ": " separator.
-
-Conversation (user messages, chronological):
-${messages.map((m, i) => `${i + 1}. ${m}`).join("\n")}
-
-Respond with ONLY the title (or ${RENAME_NO_CHANGE}), max 14 words, with no angle brackets, field labels, numbering, or other text.`;
-}
-
 /**
  * Build the trailing title instruction for the automatic path. The model's
  * live context (the whole conversation) is sent as-is in front of this; only

@@ -64,7 +64,7 @@ The full section list, the re-compress / overflow / contradiction rules, and the
 
 On `agent_before_settle` — after the first turn, and every `autoname.refreshTurns` turns after — the retitle reuses the model's **live context** (`event.context.llmMessages`) as a prefix-cache hit: the whole conversation is sent as-is and only a trailing title instruction is new input, so the call is cheap. The model produces a `main topic: latest context` title (or answers `NO_CHANGE` to keep the current one, which is read from the session — authoritative across restarts), and the result is set via `pi.setSessionName`. The call is a side channel: it writes nothing back into the session.
 
-- **`/rename`** runs the same pass on demand and reports the outcome (renamed / no change / nothing yet / no title produced). It works even when auto-rename is off. It is a cold call over a re-sampled slice of the user messages (first + up to 3 sampled from the middle + last 3, each capped at 500 chars), since it has no live context to reuse.
+- **`/rename`** runs the same pass on demand and reports the outcome (renamed / no change / nothing yet / no title produced). It works even when auto-rename is off. It reconstructs the same live context from the session (`buildSessionProjection()`), so it is also a prefix-cache hit — the only difference from the automatic path is where the context comes from.
 - **`/auto-rename`** toggles the feature per session (`on` / `off` / `status`; no argument flips). State is stored as a per-session custom entry, so it survives restarts and `pi --resume`, is never sent to the LLM, and is still readable after compaction. While off, the footer shows `auto-rename: off`.
 
 Because the retitle rides on `agent_before_settle`, it blocks settlement for the call's duration (a few seconds — cheap, since it's a cache hit). The prefix-cache hit is fully realized on a local OpenAI-compatible server (persistent KV cache); on cloud providers it's a cache-read discount, not free input.
@@ -139,7 +139,7 @@ This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable vi
 
 ### `autoname`
 
-- `autoname.systemPromptPrefix` — injected at the start of the auto-rename system prompt. Default `""` (no injection).
+- `autoname.systemPromptPrefix` — prepended to the title instruction (both the automatic and on-demand paths). Default `""` (no prefix).
 - `autoname.refreshTurns` — re-evaluate the session title every N settled turns. `0` = one-shot (name only after the first settled turn). Default `5`.
 
 ### `compaction`
