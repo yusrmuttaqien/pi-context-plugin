@@ -99,6 +99,19 @@ The actual file removal happens in the post-switch `withSession` callback, after
 
 `/close-session` closes pi, deleting the current session first if it has a conversation. It reuses the `/open-session` delete logic: an empty session (no user/assistant messages) has nothing to delete, so the prompt is skipped; a session with a conversation shows the delete dialog first. Esc cancels without closing.
 
+## Slash commands
+
+The plugin registers these slash commands (pi-vcc's `/pi-vcc` and `/pi-vcc-recall` are separate — see the pi-vcc integration above):
+
+| Command | Subcommands / args | What each does |
+|---|---|---|
+| `/auto-rename` | `on` · `off` · `status` · *(none)* | enable · disable · show state · toggle |
+| `/rename` | *(none)* | run the LLM rename now |
+| `/open-session` | `new`/`here` · `open` · `new <path>` · *(none)* | new here · open existing · new in dir · action picker |
+| `/close-session` | *(none)* | close pi, deleting the session first if it has a conversation |
+
+`/auto-rename` and `/open-session` have true subcommands (a keyword switches behavior); `/rename` and `/close-session` take no args. (`/compact` is pi's built-in, not registered here — the plugin's compaction handler intercepts it.)
+
 ## Configuration
 
 This extension reads `~/.pi/agent/pi-context-plugin-config.json` (overridable via `PI_CONTEXT_PLUGIN_CONFIG_PATH`): created on first load, missing keys filled in, existing values preserved. Settings are namespaced by feature. Old flat keys (`compactionTargetWords`, `compactionMaxTokens`, `recallKeyBudget`, `autonameSystemPromptPrefix`, `autonameRefreshTurns`, `compactionSystemPromptPrefix`, `tokensPerWord`, `padding`) are migrated into this structure automatically; the removed word-target knobs (`compactionTargetWords`, `tokensPerWord`, `padding`) are dropped.
