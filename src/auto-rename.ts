@@ -74,7 +74,7 @@ function writeAutonameState(pi: ExtensionAPI, enabled: boolean): void {
  */
 function reflectStatus(ctx: ExtensionContext, enabled: boolean): void {
 	if (!ctx.hasUI) return;
-	ctx.ui.setStatus("autoname", enabled ? undefined : "autoname: off");
+	ctx.ui.setStatus("auto-rename", enabled ? undefined : "auto-rename: off");
 }
 
 // --- Naming ---
