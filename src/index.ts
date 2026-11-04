@@ -3,8 +3,8 @@
  *
  * Registers:
  * - Hybrid compaction (src/compaction.ts)
- * - Session auto-rename (src/auto-rename.ts), with a per-session
- *   /autoname toggle (src/autoname-toggle.ts)
+ * - Session auto-rename (src/auto-rename.ts): automatic retitle from the
+ *   live context, a per-session /auto-rename toggle, and on-demand /rename
  * - /open (src/open-session.ts): session launcher — switch to an existing
  *   session, start a new one (here or in another directory), or delete the
  *   current session and start fresh
@@ -24,7 +24,6 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoRename } from "./auto-rename";
-import { registerAutonameToggle } from "./autoname-toggle";
 import { registerCompaction } from "./compaction";
 import { registerOpenSession, registerEmptySessionCleanup } from "./open-session";
 import { piVccExtension } from "./pi-vcc";
@@ -33,7 +32,6 @@ import { scaffoldSettings } from "./settings";
 export default function (pi: ExtensionAPI) {
 	scaffoldSettings();
 	registerAutoRename(pi);
-	registerAutonameToggle(pi);
 	registerCompaction(pi);
 	registerOpenSession(pi);
 	registerEmptySessionCleanup(pi);

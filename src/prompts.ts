@@ -136,9 +136,9 @@ export interface RenamePromptOptions {
 }
 
 /**
- * Build the session-title prompt.
- *
- * The main topic must be derivable from the whole conversation, not
+ * Build the session-title prompt for the on-demand /rename path, which is a
+ * cold call over a re-sampled slice of the user messages (no live context to
+ * reuse). The main topic must be derivable from the whole conversation, not
  * just the first message — topics can shift mid-conversation.
  */
 export function buildRenamePrompt(options: RenamePromptOptions): string {
@@ -159,6 +159,26 @@ If the conversation is a single simple topic, use just a short title with no ": 
 
 Conversation (user messages, chronological):
 ${messages.map((m, i) => `${i + 1}. ${m}`).join("\n")}
+
+Respond with ONLY the title (or ${RENAME_NO_CHANGE}), max 14 words, with no angle brackets, field labels, numbering, or other text.`;
+}
+
+/**
+ * Build the trailing title instruction for the automatic path. The model's
+ * live context (the whole conversation) is sent as-is in front of this; only
+ * this instruction is new input, so the call is a prefix-cache hit. No
+ * conversation is embedded here — it is already in the context.
+ */
+export function buildTitleInstruction(currentTitle?: string): string {
+	const current = currentTitle
+		? `\nCurrent title: "${currentTitle}". If it still fits the conversation, respond ${RENAME_NO_CHANGE}.\n`
+		: "";
+
+	return `Generate a short title for this conversation.${current}
+
+The title has two parts separated by ": ":
+- Main topic: the overall topic the conversation is currently about. If the topic has shifted, use the new topic, not the original one.
+- Latest context: what is being worked on right now, from the most recent messages.
 
 Respond with ONLY the title (or ${RENAME_NO_CHANGE}), max 14 words, with no angle brackets, field labels, numbering, or other text.`;
 }

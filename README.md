@@ -33,7 +33,7 @@ Four features:
    - recent raw messages kept verbatim via `firstKeptEntryId` (pi handles this automatically)
    - an explicit trust hierarchy: raw messages > recalled text > summary > model memory
 
-2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent. Toggle off per session with `/autoname`, run on demand with `/rename`.
+2. **Auto-rename** — after the first settled agent turn, generates a session title in `main topic: latest context` format and sets it via `pi.setSessionName`. Re-evaluated every `autoname.refreshTurns` settled turns (default 5) so the title tracks conversations that move to new topics. Best-effort; failures are silent. The retitle reuses the model's live context as a prefix-cache hit, so it's cheap. Toggle off per session with `/auto-rename`, run on demand with `/rename`.
 
 3. **pi-vcc, built in** — registers everything the [pi-vcc](https://github.com/sting8k/pi-vcc) extension registers, from the vendored git submodule: the `vcc_recall` tool, the `/pi-vcc` and `/pi-vcc-recall` commands, and pi-vcc's settings scaffolding. No separate pi-vcc install needed.
 
@@ -62,10 +62,12 @@ The full section list, the re-compress / overflow / contradiction rules, and the
 
 ### Auto-rename
 
-After the first settled turn — and every `autoname.refreshTurns` turns after — it calls the model with a slice of user messages (first + up to 3 sampled from the middle + last 3, each capped at 500 chars) to produce a `main topic: latest context` title, set via `pi.setSessionName`. The model may answer `NO_CHANGE` to keep the current title, which is read from the session (authoritative across restarts).
+On `agent_before_settle` — after the first turn, and every `autoname.refreshTurns` turns after — the retitle reuses the model's **live context** (`event.context.llmMessages`) as a prefix-cache hit: the whole conversation is sent as-is and only a trailing title instruction is new input, so the call is cheap. The model produces a `main topic: latest context` title (or answers `NO_CHANGE` to keep the current one, which is read from the session — authoritative across restarts), and the result is set via `pi.setSessionName`. The call is a side channel: it writes nothing back into the session.
 
-- **`/rename`** runs the same pass on demand and reports the outcome (renamed / no change / nothing yet / no title produced). It works even when auto-rename is off.
-- **`/autoname`** toggles the feature per session (`on` / `off` / `status`; no argument flips). State is stored as a per-session custom entry, so it survives restarts and `pi --resume`, is never sent to the LLM, and is still readable after compaction. While off, the footer shows `autoname: off`.
+- **`/rename`** runs the same pass on demand and reports the outcome (renamed / no change / nothing yet / no title produced). It works even when auto-rename is off. It is a cold call over a re-sampled slice of the user messages (first + up to 3 sampled from the middle + last 3, each capped at 500 chars), since it has no live context to reuse.
+- **`/auto-rename`** toggles the feature per session (`on` / `off` / `status`; no argument flips). State is stored as a per-session custom entry, so it survives restarts and `pi --resume`, is never sent to the LLM, and is still readable after compaction. While off, the footer shows `autoname: off`.
+
+Because the retitle rides on `agent_before_settle`, it blocks settlement for the call's duration (a few seconds — cheap, since it's a cache hit). The prefix-cache hit is fully realized on a local OpenAI-compatible server (persistent KV cache); on cloud providers it's a cache-read discount, not free input.
 
 ### pi-vcc integration
 
@@ -145,8 +147,7 @@ pi-context-plugin/
 ├── src/
 │   ├── index.ts          # entry point, registers all features (order matters)
 │   ├── compaction.ts     # hybrid compaction handler
-│   ├── auto-rename.ts    # session auto-rename handler + /rename command
-│   ├── autoname-toggle.ts  # /autoname command + per-session on/off state
+│   ├── auto-rename.ts    # session auto-rename: live-context retitle + /auto-rename + /rename + per-session state
 │   ├── open-session/     # /open: session launcher (new here / new in dir / open existing / delete+new)
 │   │   ├── index.ts      #   re-exports the command + empty-session cleanup
 │   │   ├── command.ts    #   /open command + empty-session session_shutdown cleanup
@@ -154,7 +155,7 @@ pi-context-plugin/
 │   │   ├── scan.ts       #   session scanning, grouping, date formatting
 │   │   └── ui.ts         #   GroupedList, Panel, WithHeader
 │   ├── pi-vcc.ts         # pi-vcc integration: full extension + compile() fallback
-│   ├── prompts.ts        # prompt builders (summary + rename)
+│   ├── prompts.ts        # prompt builders (summary + rename + title instruction)
 │   └── settings.ts       # extension settings (mirrors pi-vcc's settings structure)
 ├── vendor/
 │   └── pi-vcc/           # git submodule → github.com/sting8k/pi-vcc

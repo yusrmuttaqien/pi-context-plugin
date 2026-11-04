@@ -1,32 +1,89 @@
 /**
- * Auto-rename handler.
+ * Session auto-rename: retitle the session from its live context.
  *
- * After the first settled agent turn, generates a short session title from
- * the conversation and sets it via `pi.setSessionName`. Best-effort; failures
- * are silent.
+ * The automatic retitle rides on `agent_before_settle` and reuses the model's
+ * existing context (`event.context.llmMessages`) as a prefix-cache hit: the
+ * whole conversation is sent as-is and only the trailing title instruction is
+ * new input, so the call is cheap and writes nothing back into the session
+ * (only `pi.setSessionName`, which is metadata, not a message).
  *
- * The title uses a two-section format — `main topic: latest context`
- * — so a single chat that progresses to new topics keeps a name that tracks
- * where the conversation is now, not where it started. Both parts update as
- * the conversation moves. To support that, the naming call re-runs every
- * `autoname.refreshTurns` settled turns (0 = one-shot), and the model may
- * respond NO_CHANGE when the current title still fits.
+ * The per-session `/auto-rename` toggle and the on-demand `/rename` live here
+ * too. `/rename` is a cold call over a re-sampled slice of the user messages
+ * (it has no live context to reuse), and works even when `/auto-rename` is
+ * off, since it is an explicit user action.
  *
- * The same naming logic is exposed as the `/rename` command, which runs the
- * auto-rename on demand (it works even when `/autoname` is off, since it is an
- * explicit user action) and reports the outcome to the user.
+ * The title uses a two-section format — `main topic: latest context` — so a
+ * single chat that progresses to new topics keeps a name that tracks where the
+ * conversation is now. The naming call re-runs every `autoname.refreshTurns`
+ * turns (0 = one-shot), and the model may respond NO_CHANGE when the current
+ * title still fits.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildRenamePrompt, RENAME_NO_CHANGE } from "./prompts";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	SessionEntry,
+} from "@earendil-works/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
 import { loadSettings } from "./settings";
-import { readAutonameState } from "./autoname-toggle";
+import { buildRenamePrompt, buildTitleInstruction, RENAME_NO_CHANGE } from "./prompts";
+
+// --- Per-session toggle state (custom entry) ---
+
+/** customType used to tag the per-session autoname state entry. */
+const AUTONAME_ENTRY_TYPE = "pi-context-autoname";
+
+/** Shape of the data stored on the autoname custom entry. */
+interface AutonameEntryData {
+	enabled: boolean;
+	at: number;
+}
+
+/**
+ * Read the current auto-rename state for this session from the active branch.
+ * Returns the most recent autoname entry's `enabled` flag; defaults to true
+ * (enabled) when the session has no such entry yet or the entry is malformed.
+ *
+ * Uses `getBranch()` (the full structural path, root -> leaf) rather than
+ * `buildContextEntries()`, so the entry is found even when it predates a
+ * compaction boundary. Branching to a point before the entry correctly
+ * reverts to the default (enabled) for that earlier context.
+ */
+function readAutonameState(sm: { getBranch(): SessionEntry[] }): boolean {
+	const branch = sm.getBranch();
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry.type === "custom" && entry.customType === AUTONAME_ENTRY_TYPE) {
+			const data = entry.data as AutonameEntryData | undefined;
+			return data && typeof data.enabled === "boolean" ? data.enabled : true;
+		}
+	}
+	return true;
+}
+
+/** Persist a new auto-rename state as a custom entry (per-session, reload-safe). */
+function writeAutonameState(pi: ExtensionAPI, enabled: boolean): void {
+	const data: AutonameEntryData = { enabled, at: Date.now() };
+	pi.appendEntry(AUTONAME_ENTRY_TYPE, data);
+}
+
+/**
+ * Reflect the current state in the footer status bar. Only shows an indicator
+ * when auto-rename is disabled (enabled is the default and unremarkable).
+ * No-op in modes without UI (e.g. `print`).
+ */
+function reflectStatus(ctx: ExtensionContext, enabled: boolean): void {
+	if (!ctx.hasUI) return;
+	ctx.ui.setStatus("autoname", enabled ? undefined : "autoname: off");
+}
+
+// --- Naming ---
 
 /** Per-message cap for the naming call — titles only need a slice of each message. */
 const TITLE_MESSAGE_CAP = 500;
 
 /**
- * Select the user messages the naming call sees: the first, up to three
+ * Select the user messages the cold naming call sees: the first, up to three
  * evenly sampled from the middle, and the last three. The main topic must
  * be derivable from the whole conversation, not just the first message —
  * topics can shift mid-conversation.
@@ -50,6 +107,37 @@ function selectMessagesForTitle(userMessages: string[]): string[] {
 	return [first, ...sampled, ...recent];
 }
 
+/** Extract the user messages from the transcript (for the cold /rename path). */
+function extractUserMessages(ctx: ExtensionContext): string[] {
+	const entries = ctx.sessionManager.buildContextEntries();
+	const userMessages: string[] = [];
+	for (const entry of entries) {
+		if (entry.type !== "message" || entry.message.role !== "user") continue;
+		const raw = entry.message.content;
+		const text = (
+			typeof raw === "string"
+				? raw
+				: raw
+						.filter((block): block is { type: "text"; text: string } => block.type === "text")
+						.map((block) => block.text)
+						.join(" ")
+		).trim();
+		if (!text) continue;
+		userMessages.push(
+			text.length > TITLE_MESSAGE_CAP
+				? `${text.slice(0, 400)}\n...\n${text.slice(-100)}`
+				: text,
+		);
+	}
+	return userMessages;
+}
+
+function buildTitleSystemPrompt(prefix: string): string {
+	return prefix.trim()
+		? `${prefix.trim()}\n\nYou generate short session titles. Respond with only the title.`
+		: "You generate short session titles. Respond with only the title.";
+}
+
 /** Outcome of a naming attempt, reported by the `/rename` command. */
 type RenameOutcome =
 	| { status: "renamed"; name: string }
@@ -58,69 +146,64 @@ type RenameOutcome =
 	| { status: "error" };
 
 export function registerAutoRename(pi: ExtensionAPI): void {
-	let settledCount = 0;
+	let runCount = 0;
 	let currentTitle: string | null = null;
 	let wasEnabled = true; // mirrors the persisted state; used to detect re-enable
 
 	/**
-	 * Run one naming pass: extract user messages, build the prompt, call the
-	 * LLM, and set the session name. Shared by the `agent_settled` handler
-	 * (silent) and the `/rename` command (reports the outcome). The current
-	 * title is read from the session manager (authoritative, survives
-	 * restarts) so the model can respond NO_CHANGE when the title still fits.
+	 * Run one naming pass and set the session name.
+	 *
+	 * When `llmMessages` is provided (the automatic path), the live context is
+	 * sent as-is and only the trailing instruction is new input, so the call is
+	 * a prefix-cache hit. When it is not (the on-demand /rename path), a
+	 * re-sampled slice of the user messages is built and the call is cold.
 	 */
-	async function runRename(ctx: ExtensionContext): Promise<RenameOutcome> {
+	async function runRename(ctx: ExtensionContext, llmMessages?: Message[]): Promise<RenameOutcome> {
 		const model = ctx.model;
 		if (!model) return { status: "error" };
 
 		const { autoname } = loadSettings();
+		const title = ctx.sessionManager.getSessionName() ?? currentTitle ?? undefined;
+		const freePrefill = !!llmMessages && llmMessages.length > 0;
 
-		// Extract user messages from the transcript.
-		const entries = ctx.sessionManager.buildContextEntries();
-		const userMessages: string[] = [];
-		for (const entry of entries) {
-			if (entry.type !== "message" || entry.message.role !== "user") continue;
-			let text = entry.message.content
-				.filter((b): b is { type: "text"; text: string } => b.type === "text")
-				.map((b) => b.text)
-				.join(" ")
-				.trim();
-			if (!text) continue;
-			if (text.length > TITLE_MESSAGE_CAP) {
-				text = `${text.slice(0, 400)}\n...\n${text.slice(-100)}`;
-			}
-			userMessages.push(text);
+		let systemPrompt: string | undefined;
+		let messages: Message[];
+		if (freePrefill) {
+			messages = [
+				...llmMessages!,
+				{ role: "user", content: buildTitleInstruction(title), timestamp: Date.now() },
+			];
+		} else {
+			const userMessages = extractUserMessages(ctx);
+			if (userMessages.length === 0) return { status: "nothing" };
+			systemPrompt = buildTitleSystemPrompt(autoname.systemPromptPrefix);
+			messages = [
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: buildRenamePrompt({
+								messages: selectMessagesForTitle(userMessages),
+								currentTitle: title,
+							}),
+						},
+					],
+					timestamp: Date.now(),
+				},
+			];
 		}
 
-		if (userMessages.length === 0) return { status: "nothing" };
-
-		const prompt = buildRenamePrompt({
-			messages: selectMessagesForTitle(userMessages),
-			currentTitle: ctx.sessionManager.getSessionName() ?? currentTitle ?? undefined,
-		});
-
-		const systemPrompt = autoname.systemPromptPrefix.trim()
-			? `${autoname.systemPromptPrefix.trim()}\n\nYou generate short session titles. Respond with only the title.`
-			: "You generate short session titles. Respond with only the title.";
-
-		// Call the LLM.
 		try {
 			const response = await ctx.modelRegistry.complete(
 				model,
-				{
-					systemPrompt,
-					messages: [
-						{
-							role: "user" as const,
-							content: [{ type: "text" as const, text: prompt }],
-							timestamp: Date.now(),
-						},
-					],
-				},
+				{ systemPrompt, messages },
 				{
 					maxTokens: 100,
 					timeoutMs: 10_000,
-					cacheRetention: "none",
+					// Cold path: don't retain the cache. Free-prefill path: leave the
+					// default so the main conversation's warm KV cache is reused.
+					...(freePrefill ? {} : { cacheRetention: "none" as const }),
 				},
 			);
 
@@ -142,8 +225,12 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 		}
 	}
 
-	pi.on("agent_settled", async (_event, ctx) => {
-		settledCount++;
+	// Automatic retitle: first run, then every refreshTurns runs. It rides on
+	// agent_before_settle (not agent_settled) so it can reuse the live context
+	// for a prefix-cache hit. Awaiting the short title call blocks settlement
+	// for a few seconds — the price of the free prefill.
+	pi.on("agent_before_settle", async (event, ctx) => {
+		runCount++;
 
 		// Auto-rename is a per-session, user-toggleable feature. Read the
 		// persisted state (custom entry) each turn; when disabled, skip
@@ -159,16 +246,44 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 		const due =
 			isFirst ||
 			isReEnable ||
-			(autoname.refreshTurns > 0 && settledCount % autoname.refreshTurns === 0);
+			(autoname.refreshTurns > 0 && runCount % autoname.refreshTurns === 0);
 		if (!due) return;
 
 		// Silent — background naming is best-effort.
-		await runRename(ctx);
+		await runRename(ctx, event.context.llmMessages);
+	});
+
+	pi.registerCommand("auto-rename", {
+		description:
+			"Toggle auto-rename for this session. No argument toggles; `on`/`off` set it; `status` shows the current state.",
+		handler: async (args, ctx) => {
+			const arg = args.trim().toLowerCase();
+			const current = readAutonameState(ctx.sessionManager);
+
+			if (arg === "status") {
+				reflectStatus(ctx, current);
+				ctx.ui.notify(`Auto-rename is ${current ? "on" : "off"} for this session.`, "info");
+				return;
+			}
+
+			let next: boolean;
+			if (arg === "on") next = true;
+			else if (arg === "off") next = false;
+			else if (arg === "") next = !current; // no argument -> toggle
+			else {
+				ctx.ui.notify("Usage: /auto-rename [on|off|status]  (no argument toggles)", "info");
+				return;
+			}
+
+			writeAutonameState(pi, next);
+			reflectStatus(ctx, next);
+			ctx.ui.notify(`Auto-rename is now ${next ? "on" : "off"} for this session.`, "info");
+		},
 	});
 
 	pi.registerCommand("rename", {
 		description:
-			"Run the auto-rename now (LLM-generated title). Works even when /autoname is off.",
+			"Run the auto-rename now (LLM-generated title). Works even when /auto-rename is off.",
 		handler: async (_args, ctx) => {
 			const result = await runRename(ctx);
 			if (!ctx.hasUI) return;
@@ -187,5 +302,10 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 					break;
 			}
 		},
+	});
+
+	// On session start/resume, reflect the persisted state in the status bar.
+	pi.on("session_start", (_event, ctx) => {
+		reflectStatus(ctx, readAutonameState(ctx.sessionManager));
 	});
 }
