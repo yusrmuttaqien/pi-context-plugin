@@ -2,10 +2,13 @@
  * Session auto-rename: retitle the session from its live context.
  *
  * The automatic retitle rides on `agent_before_settle` and reuses the model's
- * existing context (`event.context.llmMessages`) as a prefix-cache hit: the
- * whole conversation is sent as-is and only the trailing title instruction is
- * new input, so the call is cheap and writes nothing back into the session
- * (only `pi.setSessionName`, which is metadata, not a message).
+ * existing context as a prefix-cache hit: the whole conversation is sent as-is
+ * and only the trailing title instruction is new input, so the call is cheap
+ * and writes nothing back into the session (only `pi.setSessionName`, which
+ * is metadata, not a message). The context is captured from the
+ * `context_with_system` hook (the last extension-visible point in the main
+ * loop's pipeline), which is byte-identical to the chat's actual prompt in
+ * the common case (no hidden tool declarations, no forced system prompt).
  *
  * The per-session `/auto-rename` toggle and the on-demand `/rename` live here
  * too. Both flows reuse the model's live context as a prefix-cache hit; `/rename`
@@ -21,6 +24,7 @@
  */
 
 import type {
+	ContextWithSystemEvent,
 	ExtensionAPI,
 	ExtensionContext,
 	SessionEntry,
@@ -94,6 +98,16 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 	let wasEnabled = true; // mirrors the persisted state; used to detect re-enable
 
 	/**
+	 * Messages captured from the `context_with_system` hook — the last
+	 * extension-visible point in the main loop's pipeline, after `context`
+	 * handlers but before the session's hidden-declaration / forced-prompt
+	 * projections. In the common case (no hidden tools, no forced prompt)
+	 * these are byte-identical to what the chat sends, so reusing them for
+	 * the retitle yields a prefix-cache hit.
+	 */
+	let lastContextMessages: ContextWithSystemEvent["messages"] | null = null;
+
+	/**
 	 * Run one naming pass and set the session name.
 	 *
 	 * Both flows reuse the model's live context as a prefix-cache hit: the whole
@@ -153,6 +167,14 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 		}
 	}
 
+	// Capture the main loop's messages at the last extension-visible point
+	// (after `context` handlers, before session projections). These are
+	// byte-identical to the chat's actual prompt in the common case, so
+	// reusing them for the retitle yields a prefix-cache hit.
+	pi.on("context_with_system", (event) => {
+		lastContextMessages = event.messages;
+	});
+
 	// Automatic retitle: first run, then every refreshTurns runs. It rides on
 	// agent_before_settle (not agent_settled) so it can reuse the live context
 	// for a prefix-cache hit. Awaiting the short title call blocks settlement
@@ -177,8 +199,15 @@ export function registerAutoRename(pi: ExtensionAPI): void {
 			(autoname.refreshTurns > 0 && runCount % autoname.refreshTurns === 0);
 		if (!due) return;
 
+		// Prefer the captured context_with_system messages (byte-identical to
+		// the chat's actual prompt in the common case) over event.context.
+		// llmMessages (which skips transformContext and diverges when the
+		// session has hidden declarations or a forced prompt).
+		const contextMessages = lastContextMessages;
+		lastContextMessages = null;
+
 		// Silent — background naming is best-effort.
-		await runRename(ctx, event.context.llmMessages);
+		await runRename(ctx, contextMessages ? convertToLlm(contextMessages) : event.context.llmMessages);
 	});
 
 	pi.registerCommand("auto-rename", {
