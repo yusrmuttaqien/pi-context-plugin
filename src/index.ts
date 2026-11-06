@@ -3,6 +3,8 @@
  *
  * Registers:
  * - Hybrid compaction (src/compaction.ts)
+ *   [currently disabled — registration commented out in default export;
+ *   pi's native compaction applies unless pi-vcc claims the compact]
  * - Session auto-rename (src/auto-rename.ts): automatic retitle from the
  *   live context, a per-session /auto-rename toggle, and on-demand /rename
  *   [currently disabled — registration commented out in default export]
@@ -27,7 +29,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // import { registerAutoRename } from "./auto-rename"; // disabled: thinking-level mismatch drops cache-hit to ~30%
-import { registerCompaction } from "./compaction";
+// import { registerCompaction } from "./compaction"; // disabled: restore pi's native compaction
 import { registerOpenSession, registerCloseSession, registerEmptySessionCleanup } from "./open-session";
 import { piVccExtension } from "./pi-vcc";
 import { scaffoldSettings } from "./settings";
@@ -35,7 +37,7 @@ import { scaffoldSettings } from "./settings";
 export default function (pi: ExtensionAPI) {
 	scaffoldSettings();
 	// registerAutoRename(pi); // disabled pending cache-hit fix (match session thinking level)
-	registerCompaction(pi);
+	// registerCompaction(pi); // disabled: restore pi's native compaction
 	registerOpenSession(pi);
 	registerCloseSession(pi);
 	registerEmptySessionCleanup(pi);
