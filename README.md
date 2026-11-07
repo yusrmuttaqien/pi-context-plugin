@@ -2,6 +2,16 @@
 
 Hybrid compaction, auto-rename, a session launcher, and built-in pi-vcc for [pi](https://github.com/badlogic/pi-mono).
 
+> **Status: ground-up rebuild in progress.** The hybrid compaction and auto-rename modules were removed from `src/`. Only the session launcher (`open-session/`) and the built-in pi-vcc registration are active; pi's native compaction applies unless pi-vcc claims one. The feature sections further down ("What it does", "How it works", "Configuration", "Slash commands", "File layout") still describe compaction and auto-rename and are stale until the rebuild lands.
+
+### Leftover dead code from the compaction / auto-rename wipe
+
+The removal was intentionally left forward-compatible — none of it disturbs plugin loading, and part of it is kept for a possible pi-vcc compaction fallback:
+
+- `src/prompts.ts` — **orphaned.** Its only importers were `compaction.ts` and `auto-rename.ts`; nothing references it now.
+- `src/settings.ts` — holds only the `autoname` and `compaction` namespaces, both feature-less now. `index.ts` still calls `scaffoldSettings()` (harmless, but it maintains a config file nothing reads), and `loadSettings` has no importers.
+- `src/pi-vcc.ts` — still required (it exports `piVccExtension`), but `piVccCompile`, `PI_VCC_COMPACT_INSTRUCTION`, and `loadPiVccSettings` are unused. Kept because `piVccCompile` is the hook for re-integrating pi-vcc as the compaction fallback.
+
 ## Usage
 
 Install from git:
