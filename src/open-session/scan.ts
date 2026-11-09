@@ -6,6 +6,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 export interface SessionRow {
   file: string;
   name: string | null;
+  /** Snippet of the latest assistant reply text; list fallback when no name is set. */
+  preview: string | null;
   cwd: string;
   id: string;
   created: number;
@@ -13,18 +15,60 @@ export interface SessionRow {
   hasConversation: boolean;
 }
 
+/** Marks a fallback label as extracted, so it reads distinctly from a real session name. */
+export const PREVIEW_PREFIX = "[from last reply] ";
+
+const PREVIEW_MAX = 72;
+
+// content[] of a pi message is text parts plus thinking/toolCall parts; the
+// fallback uses plain text only.
+function assistantTextParts(message: unknown): string[] {
+  const m = message as { role?: string; content?: unknown };
+  if (m?.role !== "assistant" || !Array.isArray(m.content)) return [];
+  return m.content
+    .filter((p) => p && typeof p === "object" && (p as { type?: string }).type === "text")
+    .map((p) => (p as { text?: unknown }).text)
+    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+}
+
+function extractPreview(text: string): string | null {
+  let last = "";
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const e = JSON.parse(line) as { type?: string; message?: unknown };
+      if (e.type === "message") {
+        for (const t of assistantTextParts(e.message)) last = t;
+      }
+    } catch {
+      // skip
+    }
+  }
+  const cleaned = last.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  return cleaned.length > PREVIEW_MAX ? cleaned.slice(0, PREVIEW_MAX - 1).trimEnd() + "…" : cleaned;
+}
+
+/** Name when set; otherwise the last-reply snippet with its marker; else untitled. */
+export function sessionLabel(row: Pick<SessionRow, "name" | "preview">): string {
+  if (row.name) return row.name;
+  if (row.preview) return PREVIEW_PREFIX + row.preview;
+  return "(untitled)";
+}
+
 export async function readJsonl(file: string): Promise<{
   cwd: string | null;
   id: string;
   created: number;
   name: string | null;
+  preview: string | null;
   hasConversation: boolean;
 }> {
   let text: string;
   try {
     text = await fs.readFile(file, "utf8");
   } catch {
-    return { cwd: null, id: "", created: 0, name: null, hasConversation: false };
+    return { cwd: null, id: "", created: 0, name: null, preview: null, hasConversation: false };
   }
   let cwd: string | null = null;
   let id = "";
@@ -52,7 +96,7 @@ export async function readJsonl(file: string): Promise<{
       hasConversation = true;
     }
   }
-  return { cwd, id, created, name, hasConversation };
+  return { cwd, id, created, name, preview: extractPreview(text), hasConversation };
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -89,6 +133,7 @@ export async function scanSessions(): Promise<SessionRow[]> {
       rows.push({
         file: full,
         name: meta.name,
+        preview: meta.preview,
         cwd: meta.cwd,
         id: meta.id,
         created: meta.created || 0,

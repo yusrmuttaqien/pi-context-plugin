@@ -7,7 +7,7 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { scanSessions, buildGroups } from "./scan.js";
+import { scanSessions, buildGroups, sessionLabel } from "./scan.js";
 import { Panel, GroupedList, WithHeader, selectTheme, type ListRow, type ListStyles } from "./ui.js";
 
 export type TopAction = "new-here" | "new-path" | "open";
@@ -178,7 +178,7 @@ export async function pickSession(ctx: ExtensionContext, currentFile: string | n
         listRows.push({
           kind: "item",
           value: s.file,
-          label: s.name ?? "(untitled)",
+          label: sessionLabel(s),
           description: `${s.id} · ${s.date}`,
           dim: !s.hasConversation,
         });
@@ -217,7 +217,7 @@ export async function pickSession(ctx: ExtensionContext, currentFile: string | n
             if (pushed2) newRows2.push({ kind: "spacer" });
             newRows2.push({ kind: "header", text: `▸ ${g.cwd}${isCur ? "  (current)" : ""}` });
             for (const s of others) {
-              newRows2.push({ kind: "item", value: s.file, label: s.name ?? "(untitled)", description: `${s.id} · ${s.date}`, dim: !s.hasConversation });
+              newRows2.push({ kind: "item", value: s.file, label: sessionLabel(s), description: `${s.id} · ${s.date}`, dim: !s.hasConversation });
             }
             pushed2 = true;
           }
@@ -228,7 +228,7 @@ export async function pickSession(ctx: ExtensionContext, currentFile: string | n
       return new Panel(list, (t) => theme.fg("accent", t));
     }, { overlay: true, overlayOptions: { anchor: "center", width: "70%", maxHeight: "80%", margin: 2 } });
   }
-  const labels2 = flat.map((s) => `${s.name ?? "(untitled)"} — ${s.cwd} · ${s.id.slice(0, 8)} · ${s.date}`);
+  const labels2 = flat.map((s) => `${sessionLabel(s)} — ${s.cwd} · ${s.id.slice(0, 8)} · ${s.date}`);
   const sel = await ctx.ui.select("Open session", labels2);
   if (sel === undefined) return null;
   const idx = labels2.indexOf(sel);

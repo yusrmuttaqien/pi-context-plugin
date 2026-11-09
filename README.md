@@ -179,7 +179,7 @@ pi-context-plugin/
 │   │   ├── index.ts      #   re-exports the command + empty-session cleanup
 │   │   ├── command.ts    #   /open-session + /close-session commands + empty-session session_shutdown cleanup
 │   │   ├── pickers.ts    #   action / path / session / delete pickers
-│   │   ├── scan.ts       #   session scanning, grouping, date formatting
+│   │   ├── scan.ts       #   session scanning, grouping, date formatting, last-reply preview + label
 │   │   └── ui.ts         #   GroupedList, Panel, WithHeader
 │   ├── pi-vcc.ts         # pi-vcc integration: full extension + compile() fallback
 │   ├── prompts.ts        # prompt builders (summary + rename + title instruction)
